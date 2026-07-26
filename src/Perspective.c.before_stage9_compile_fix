@@ -28,9 +28,7 @@ static Layer *rootLayer, *layer;
 static AppTimer *timer;
 static AccelData latestAccel;
 static bool haveAccel = false;
-static int16_t smoothedAccelX = 0;
-static int16_t smoothedAccelY = 0;
-static int16_t smoothedAccelZ = 0;
+static GPoint3 smoothedAccel;
 static bool smoothedAccelInitialized = false;
 static int32_t a=0, b=0, c=0;
 static int32_t cosa, sina, cosb, sinb, cosc, sinc;
@@ -335,28 +333,22 @@ static void timerCallback(void *data) {
     const int16_t rawZ = latestAccel.z >> 5;
 
     if (!smoothedAccelInitialized) {
-      smoothedAccelX = rawX;
-      smoothedAccelY = rawY;
-      smoothedAccelZ = rawZ;
+      smoothedAccel.x = rawX;
+      smoothedAccel.y = rawY;
+      smoothedAccel.z = rawZ;
       smoothedAccelInitialized = true;
     } else {
       // 75% newest value, 25% previous value.
       // This removes visible stepping without recreating the old delay.
-      smoothedAccelX =
-          (smoothedAccelX + 3 * rawX) >> 2;
-      smoothedAccelY =
-          (smoothedAccelY + 3 * rawY) >> 2;
-      smoothedAccelZ =
-          (smoothedAccelZ + 3 * rawZ) >> 2;
+      smoothedAccel.x =
+          (smoothedAccel.x + 3 * rawX) >> 2;
+      smoothedAccel.y =
+          (smoothedAccel.y + 3 * rawY) >> 2;
+      smoothedAccel.z =
+          (smoothedAccel.z + 3 * rawZ) >> 2;
     }
 
-    GPoint3 smoothedVector = {
-      smoothedAccelX,
-      smoothedAccelY,
-      smoothedAccelZ
-    };
-
-    angles(&smoothedVector, &a, &b, &c);
+    angles(&smoothedAccel, &a, &b, &c);
 
     cosa = cos_lookup(a);
     cosb = cos_lookup(b);

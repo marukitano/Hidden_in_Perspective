@@ -1,21 +1,20 @@
 #include <pebble.h>
 
+#include <string.h>
 #define M_PI		3.14159265358979323846
 
 #define SIZE 54
 #define OFFSET 7
 #define ZPOS -27
 #define EYEZ 270
-
-#define EMERY_WIDTH 200
-#define EMERY_HEIGHT 228
-#define EMERY_CENTER_X 100
-#define EMERY_CENTER_Y 114
 #define SHIFT 8
 
-// Perspective Time 2 smooth low-latency stage 9
-#define SENSOR_RATE ACCEL_SAMPLING_50HZ
-#define FRAME_INTERVAL_MS 33
+// Perspective Time 2 layout
+#define POINT_RADIUS 2
+#define WAVE_DEPTH 8
+
+// Perspective Time 2 tuning stage 2
+#define TIMERDELAY 50
 enum {
   CONFIG_KEY_NIGHTSTART = 3333,
   CONFIG_KEY_NIGHTSTOP = 3334
@@ -26,18 +25,14 @@ static const int32_t TRIG_MAX_ANGLE_BY_4 = TRIG_MAX_ANGLE / 4;
 static Window *window;
 static Layer *rootLayer, *layer;
 static AppTimer *timer;
-static AccelData latestAccel;
-static bool haveAccel = false;
-static int16_t smoothedAccelX = 0;
-static int16_t smoothedAccelY = 0;
-static int16_t smoothedAccelZ = 0;
-static bool smoothedAccelInitialized = false;
 static int32_t a=0, b=0, c=0;
 static int32_t cosa, sina, cosb, sinb, cosc, sinc;
 static int hour;
 static int d[6];
 static int digitOffsetX[6], digitOffsetY[6];
-static GRect fullScreenRect = GRect(0, 0, EMERY_WIDTH, EMERY_HEIGHT);
+static GRect fullScreenRect;
+static int16_t screenCenterX;
+static int16_t screenCenterY;
 static int nightStartHour = 19, nightStopHour = 7;
 
 static const uint16_t __ACOS[1025] = {
@@ -285,90 +280,111 @@ static inline void transformPoint(const GPoint3 *P, GPoint3 *T) {
 }
 
 static inline void projectPoint(const GPoint3 *T, GPoint *S) {
-  S->x = (eye.z * T->x) / (eye.z + T->z) + EMERY_CENTER_X;
-  S->y = (eye.z * T->y) / (eye.z + T->z) + EMERY_CENTER_Y;
+  S->x = (eye.z * T->x) / (eye.z + T->z) + screenCenterX;
+  S->y = (eye.z * T->y) / (eye.z + T->z) + screenCenterY;
 }
 
-static void drawPoint(GContext *ctx, const GPoint3 *P) {
-  GPoint S;
-  GPoint3 T;
+// Perspective Time 2 direct framebuffer stage 5b
+#define FAST_POINT_SIZE 4
+#define COLOR_BLACK_8BIT 0xC0
+#define COLOR_WHITE_8BIT 0xFF
 
-  transformPoint(P, &T);
-  projectPoint(&T, &S);
+static inline void drawPointFast(
+    uint8_t *framebuffer,
+    uint16_t stride,
+    int16_t width,
+    int16_t height,
+    const GPoint3 *point,
+    uint8_t color) {
+  GPoint screenPoint;
+  GPoint3 transformedPoint;
 
-  graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
+  transformPoint(point, &transformedPoint);
+  projectPoint(&transformedPoint, &screenPoint);
+
+  int16_t x0 = screenPoint.x - FAST_POINT_SIZE / 2;
+  int16_t y0 = screenPoint.y - FAST_POINT_SIZE / 2;
+  int16_t x1 = x0 + FAST_POINT_SIZE - 1;
+  int16_t y1 = y0 + FAST_POINT_SIZE - 1;
+
+  if (x1 < 0 || y1 < 0 || x0 >= width || y0 >= height) return;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 >= width) x1 = width - 1;
+  if (y1 >= height) y1 = height - 1;
+
+  const size_t runLength = (size_t)(x1 - x0 + 1);
+  for (int16_t y = y0; y <= y1; ++y) {
+    memset(framebuffer + (size_t)y * stride + x0, color, runLength);
+  }
 }
 
-static void updateLayer(Layer *layer, GContext *ctx) {
-  int i, n, curd;
-  GPoint3 P, *U;
+static void updateLayer(Layer *drawingLayer, GContext *ctx) {
+  const GRect bounds = layer_get_bounds(drawingLayer);
+  const int16_t width = bounds.size.w;
+  const int16_t height = bounds.size.h;
 
-  if ( (hour >= nightStopHour) && (hour < nightStartHour) ) {
-    // DAY
-    graphics_context_set_stroke_color(ctx, GColorWhite);
-    graphics_context_set_fill_color(ctx, GColorWhite);
-  } else {
-    //NIGHT
-    graphics_context_set_fill_color(ctx, GColorWhite);
-    graphics_fill_rect(ctx, fullScreenRect, 0, GCornerNone);
-    graphics_context_set_stroke_color(ctx, GColorBlack);
-    graphics_context_set_fill_color(ctx, GColorBlack);
+  GBitmap *framebufferBitmap =
+      graphics_capture_frame_buffer_format(ctx, GBitmapFormat8Bit);
+  if (!framebufferBitmap) return;
+
+  uint8_t *framebuffer = gbitmap_get_data(framebufferBitmap);
+  const uint16_t stride = gbitmap_get_bytes_per_row(framebufferBitmap);
+  if (!framebuffer || stride == 0) {
+    graphics_release_frame_buffer(ctx, framebufferBitmap);
+    return;
   }
 
-  for (n=0; n<6; n++) {
-    curd = d[n];
-    for (i=0, U=DIGIT_OFFSET(curd); i<numPoints[curd]; i++, U++) {
-      P.x = U->x + digitOffsetX[n];
-      P.y = U->y + digitOffsetY[n];
-      P.z = U->z;
-      drawPoint(ctx, &P);
+  const bool daytime =
+      hour >= nightStopHour && hour < nightStartHour;
+  const uint8_t backgroundColor =
+      daytime ? COLOR_BLACK_8BIT : COLOR_WHITE_8BIT;
+  const uint8_t pointColor =
+      daytime ? COLOR_WHITE_8BIT : COLOR_BLACK_8BIT;
+
+  for (int16_t y = 0; y < height; ++y) {
+    memset(framebuffer + (size_t)y * stride, backgroundColor, (size_t)width);
+  }
+
+  for (int n = 0; n < 6; ++n) {
+    const int currentDigit = d[n];
+    GPoint3 *sourcePoint = DIGIT_OFFSET(currentDigit);
+    for (int i = 0; i < numPoints[currentDigit]; ++i, ++sourcePoint) {
+      GPoint3 point;
+      point.x = sourcePoint->x + digitOffsetX[n];
+      point.y = sourcePoint->y + digitOffsetY[n];
+      point.z = sourcePoint->z;
+      drawPointFast(
+          framebuffer, stride, width, height, &point, pointColor);
     }
   }
+
+  graphics_release_frame_buffer(ctx, framebufferBitmap);
 }
 
 static void timerCallback(void *data) {
-  (void)data;
+  static AccelData ad;
+  static GPoint3 g;
 
-  if (haveAccel) {
-    const int16_t rawX = latestAccel.x >> 5;
-    const int16_t rawY = latestAccel.y >> 5;
-    const int16_t rawZ = latestAccel.z >> 5;
+  accel_service_peek(&ad);
+  // 75% current sensor value, 25% previous value:
+  // responsive on the wrist, while still suppressing small jitter.
+  g.x = (g.x + 3 * (ad.x >> 5)) >> 2;
+  g.y = (g.y + 3 * (ad.y >> 5)) >> 2;
+  g.z = (g.z + 3 * (ad.z >> 5)) >> 2;
 
-    if (!smoothedAccelInitialized) {
-      smoothedAccelX = rawX;
-      smoothedAccelY = rawY;
-      smoothedAccelZ = rawZ;
-      smoothedAccelInitialized = true;
-    } else {
-      // 75% newest value, 25% previous value.
-      // This removes visible stepping without recreating the old delay.
-      smoothedAccelX =
-          (smoothedAccelX + 3 * rawX) >> 2;
-      smoothedAccelY =
-          (smoothedAccelY + 3 * rawY) >> 2;
-      smoothedAccelZ =
-          (smoothedAccelZ + 3 * rawZ) >> 2;
-    }
+  angles(&g, &a, &b, &c);
 
-    GPoint3 smoothedVector = {
-      smoothedAccelX,
-      smoothedAccelY,
-      smoothedAccelZ
-    };
+  cosa = cos_lookup(a);
+  cosb = cos_lookup(b);
+  cosc = cos_lookup(c);
+  sina = sin_lookup(a);
+  sinb = sin_lookup(b);
+  sinc = sin_lookup(c);
 
-    angles(&smoothedVector, &a, &b, &c);
+  layer_mark_dirty(layer);
 
-    cosa = cos_lookup(a);
-    cosb = cos_lookup(b);
-    cosc = cos_lookup(c);
-    sina = sin_lookup(a);
-    sinb = sin_lookup(b);
-    sinc = sin_lookup(c);
-
-    layer_mark_dirty(layer);
-  }
-
-  timer = app_timer_register(FRAME_INTERVAL_MS, timerCallback, NULL);
+  timer = app_timer_register(TIMERDELAY, timerCallback, NULL);
 }
 
 static void handleTick(struct tm *t, TimeUnits units_changed) {
@@ -390,16 +406,7 @@ static void handleTick(struct tm *t, TimeUnits units_changed) {
 
 
 static void handleAccel(AccelData *data, uint32_t num_samples) {
-  if (!data || num_samples == 0) {
-    return;
-  }
-
-  // Copy only the newest sample. Rendering happens independently.
-  latestAccel = data[num_samples - 1];
-
-  if (!latestAccel.did_vibrate) {
-    haveAccel = true;
-  }
+  // return;
 }
 
 static void logVariables(const char *msg) {
@@ -513,14 +520,17 @@ static void init(void) {
   window_stack_push(window, true);
   rootLayer = window_get_root_layer(window);
 
+  fullScreenRect = layer_get_bounds(rootLayer);
+  screenCenterX = fullScreenRect.origin.x + fullScreenRect.size.w / 2;
+  screenCenterY = fullScreenRect.origin.y + fullScreenRect.size.h / 2;
+
   layer = layer_create(fullScreenRect);
   layer_set_update_proc(layer, updateLayer);
   layer_add_child(rootLayer, layer);
 
   tick_timer_service_subscribe(SECOND_UNIT, handleTick);
   
-  accel_service_set_sampling_rate(SENSOR_RATE);
-  accel_data_service_subscribe(1, handleAccel);
+  accel_data_service_subscribe(0, handleAccel);
   timerCallback(NULL);
 }
 

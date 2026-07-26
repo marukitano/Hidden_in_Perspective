@@ -1,0 +1,34 @@
+{
+    "sdkVersion": "3",
+    "targetPlatforms": [
+        "emery"
+    ],
+    "enableMultiJS": false,
+    "capabilities": [
+        "configurable"
+    ],
+    "projectType": "native",
+    "displayName": "Perspective",
+    "uuid": "d4f886e0-a4f4-49d0-8492-2ce6e27d7f0a",
+    "watchapp": {
+        "watchface": true,
+        "hiddenApp": false,
+        "onlyShownOnCommunication": false
+    },
+    "resources": {
+        "media": []
+    },
+    "messageKeys": {
+        "nightstart": 3333,
+        "nightstop": 3334
+    },
+    "name": "Perspective",
+    "shortName": "Perspective",
+    "longName": "Perspective",
+    "versionLabel": "1.3.0",
+    "companyName": "Jnm",
+    "appKeys": {
+        "nightstart": 3333,
+        "nightstop": 3334
+    }
+}

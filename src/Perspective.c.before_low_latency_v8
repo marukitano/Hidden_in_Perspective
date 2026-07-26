@@ -13,9 +13,8 @@
 #define EMERY_CENTER_Y 114
 #define SHIFT 8
 
-// Perspective Time 2 smooth low-latency stage 9
-#define SENSOR_RATE ACCEL_SAMPLING_50HZ
-#define FRAME_INTERVAL_MS 33
+#define TIMERDELAY 66
+
 enum {
   CONFIG_KEY_NIGHTSTART = 3333,
   CONFIG_KEY_NIGHTSTOP = 3334
@@ -26,12 +25,6 @@ static const int32_t TRIG_MAX_ANGLE_BY_4 = TRIG_MAX_ANGLE / 4;
 static Window *window;
 static Layer *rootLayer, *layer;
 static AppTimer *timer;
-static AccelData latestAccel;
-static bool haveAccel = false;
-static int16_t smoothedAccelX = 0;
-static int16_t smoothedAccelY = 0;
-static int16_t smoothedAccelZ = 0;
-static bool smoothedAccelInitialized = false;
 static int32_t a=0, b=0, c=0;
 static int32_t cosa, sina, cosb, sinb, cosc, sinc;
 static int hour;
@@ -296,7 +289,7 @@ static void drawPoint(GContext *ctx, const GPoint3 *P) {
   transformPoint(P, &T);
   projectPoint(&T, &S);
 
-  graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 1, GCornersAll);
 }
 
 static void updateLayer(Layer *layer, GContext *ctx) {
@@ -327,48 +320,26 @@ static void updateLayer(Layer *layer, GContext *ctx) {
 }
 
 static void timerCallback(void *data) {
-  (void)data;
+  static AccelData ad;
+  static GPoint3 g;
 
-  if (haveAccel) {
-    const int16_t rawX = latestAccel.x >> 5;
-    const int16_t rawY = latestAccel.y >> 5;
-    const int16_t rawZ = latestAccel.z >> 5;
+  accel_service_peek(&ad);
+  g.x = (3*g.x + (ad.x>>5)) >> 2;
+  g.y = (3*g.y + (ad.y>>5)) >> 2;
+  g.z = (3*g.z + (ad.z>>5)) >> 2;
 
-    if (!smoothedAccelInitialized) {
-      smoothedAccelX = rawX;
-      smoothedAccelY = rawY;
-      smoothedAccelZ = rawZ;
-      smoothedAccelInitialized = true;
-    } else {
-      // 75% newest value, 25% previous value.
-      // This removes visible stepping without recreating the old delay.
-      smoothedAccelX =
-          (smoothedAccelX + 3 * rawX) >> 2;
-      smoothedAccelY =
-          (smoothedAccelY + 3 * rawY) >> 2;
-      smoothedAccelZ =
-          (smoothedAccelZ + 3 * rawZ) >> 2;
-    }
+  angles(&g, &a, &b, &c);
 
-    GPoint3 smoothedVector = {
-      smoothedAccelX,
-      smoothedAccelY,
-      smoothedAccelZ
-    };
+  cosa = cos_lookup(a);
+  cosb = cos_lookup(b);
+  cosc = cos_lookup(c);
+  sina = sin_lookup(a);
+  sinb = sin_lookup(b);
+  sinc = sin_lookup(c);
 
-    angles(&smoothedVector, &a, &b, &c);
+  layer_mark_dirty(layer);
 
-    cosa = cos_lookup(a);
-    cosb = cos_lookup(b);
-    cosc = cos_lookup(c);
-    sina = sin_lookup(a);
-    sinb = sin_lookup(b);
-    sinc = sin_lookup(c);
-
-    layer_mark_dirty(layer);
-  }
-
-  timer = app_timer_register(FRAME_INTERVAL_MS, timerCallback, NULL);
+  timer = app_timer_register(TIMERDELAY, timerCallback, NULL);
 }
 
 static void handleTick(struct tm *t, TimeUnits units_changed) {
@@ -390,16 +361,7 @@ static void handleTick(struct tm *t, TimeUnits units_changed) {
 
 
 static void handleAccel(AccelData *data, uint32_t num_samples) {
-  if (!data || num_samples == 0) {
-    return;
-  }
-
-  // Copy only the newest sample. Rendering happens independently.
-  latestAccel = data[num_samples - 1];
-
-  if (!latestAccel.did_vibrate) {
-    haveAccel = true;
-  }
+  // return;
 }
 
 static void logVariables(const char *msg) {
@@ -519,8 +481,7 @@ static void init(void) {
 
   tick_timer_service_subscribe(SECOND_UNIT, handleTick);
   
-  accel_service_set_sampling_rate(SENSOR_RATE);
-  accel_data_service_subscribe(1, handleAccel);
+  accel_data_service_subscribe(0, handleAccel);
   timerCallback(NULL);
 }
 

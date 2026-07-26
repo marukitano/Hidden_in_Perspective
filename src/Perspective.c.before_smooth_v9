@@ -13,9 +13,8 @@
 #define EMERY_CENTER_Y 114
 #define SHIFT 8
 
-// Perspective Time 2 smooth low-latency stage 9
-#define SENSOR_RATE ACCEL_SAMPLING_50HZ
-#define FRAME_INTERVAL_MS 33
+#define SENSOR_RATE ACCEL_SAMPLING_25HZ
+#define FRAME_INTERVAL_MS 40
 enum {
   CONFIG_KEY_NIGHTSTART = 3333,
   CONFIG_KEY_NIGHTSTOP = 3334
@@ -28,10 +27,6 @@ static Layer *rootLayer, *layer;
 static AppTimer *timer;
 static AccelData latestAccel;
 static bool haveAccel = false;
-static int16_t smoothedAccelX = 0;
-static int16_t smoothedAccelY = 0;
-static int16_t smoothedAccelZ = 0;
-static bool smoothedAccelInitialized = false;
 static int32_t a=0, b=0, c=0;
 static int32_t cosa, sina, cosb, sinb, cosc, sinc;
 static int hour;
@@ -296,7 +291,7 @@ static void drawPoint(GContext *ctx, const GPoint3 *P) {
   transformPoint(P, &T);
   projectPoint(&T, &S);
 
-  graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
+  graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 1, GCornersAll);
 }
 
 static void updateLayer(Layer *layer, GContext *ctx) {
@@ -330,33 +325,14 @@ static void timerCallback(void *data) {
   (void)data;
 
   if (haveAccel) {
-    const int16_t rawX = latestAccel.x >> 5;
-    const int16_t rawY = latestAccel.y >> 5;
-    const int16_t rawZ = latestAccel.z >> 5;
+    GPoint3 g;
 
-    if (!smoothedAccelInitialized) {
-      smoothedAccelX = rawX;
-      smoothedAccelY = rawY;
-      smoothedAccelZ = rawZ;
-      smoothedAccelInitialized = true;
-    } else {
-      // 75% newest value, 25% previous value.
-      // This removes visible stepping without recreating the old delay.
-      smoothedAccelX =
-          (smoothedAccelX + 3 * rawX) >> 2;
-      smoothedAccelY =
-          (smoothedAccelY + 3 * rawY) >> 2;
-      smoothedAccelZ =
-          (smoothedAccelZ + 3 * rawZ) >> 2;
-    }
+    // Use the newest delivered sample directly: no multi-second filter lag.
+    g.x = latestAccel.x >> 5;
+    g.y = latestAccel.y >> 5;
+    g.z = latestAccel.z >> 5;
 
-    GPoint3 smoothedVector = {
-      smoothedAccelX,
-      smoothedAccelY,
-      smoothedAccelZ
-    };
-
-    angles(&smoothedVector, &a, &b, &c);
+    angles(&g, &a, &b, &c);
 
     cosa = cos_lookup(a);
     cosb = cos_lookup(b);
