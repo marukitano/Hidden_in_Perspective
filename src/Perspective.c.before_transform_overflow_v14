@@ -16,10 +16,7 @@
 // Perspective Time 2 projection clipping stage 11
 #define NEAR_CLIP_DISTANCE 40
 #define PROJECTION_MARGIN 4
-// Perspective Time 2 safe Q7 transform stage 14
-// Q8 overflowed int16_t after enlarging the digit plane.
-// Q7 keeps the full rotated geometry within the GPoint3 range.
-#define SHIFT 7
+#define SHIFT 8
 
 // Perspective Time 2 smooth low-latency stage 9
 // Perspective Time 2 hidden perspective stage 10

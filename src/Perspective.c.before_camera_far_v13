@@ -5,8 +5,7 @@
 #define SIZE 76
 #define OFFSET 9
 #define ZPOS -38
-// Perspective Time 2 farther camera stage 13
-#define EYEZ 480
+#define EYEZ 270
 
 #define EMERY_WIDTH 200
 #define EMERY_HEIGHT 228
@@ -16,10 +15,11 @@
 // Perspective Time 2 projection clipping stage 11
 #define NEAR_CLIP_DISTANCE 40
 #define PROJECTION_MARGIN 4
-// Perspective Time 2 safe Q7 transform stage 14
-// Q8 overflowed int16_t after enlarging the digit plane.
-// Q7 keeps the full rotated geometry within the GPoint3 range.
-#define SHIFT 7
+
+// Perspective Time 2 depth-scaled points stage 12
+#define MAX_POINT_SIZE 3
+#define MIN_POINT_SIZE 1
+#define SHIFT 8
 
 // Perspective Time 2 smooth low-latency stage 9
 // Perspective Time 2 hidden perspective stage 10
@@ -360,7 +360,36 @@ static void drawPoint(GContext *ctx, const GPoint3 *P) {
     return;
   }
 
-  graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
+  const int32_t perspectiveDepth =
+      (int32_t)eye.z + T.z;
+
+  // Scale the dot with the same perspective factor as its position.
+  // Fixed 4x4 dots overlapped when distant rows became compressed,
+  // which produced the apparent horizontal streaks.
+  int16_t pointSize =
+      (int16_t)(
+          ((int32_t)MAX_POINT_SIZE * eye.z
+           + perspectiveDepth / 2)
+          / perspectiveDepth);
+
+  if (pointSize < MIN_POINT_SIZE) {
+    pointSize = MIN_POINT_SIZE;
+  } else if (pointSize > MAX_POINT_SIZE) {
+    pointSize = MAX_POINT_SIZE;
+  }
+
+  const int16_t pointOffset =
+      pointSize / 2;
+
+  graphics_fill_rect(
+      ctx,
+      GRect(
+          S.x - pointOffset,
+          S.y - pointOffset,
+          pointSize,
+          pointSize),
+      0,
+      GCornerNone);
 }
 
 static void updateLayer(Layer *layer, GContext *ctx) {

@@ -2,30 +2,20 @@
 
 #define M_PI		3.14159265358979323846
 
-#define SIZE 76
-#define OFFSET 9
-#define ZPOS -38
-// Perspective Time 2 farther camera stage 13
-#define EYEZ 480
+#define SIZE 54
+#define OFFSET 7
+#define ZPOS -27
+#define EYEZ 270
 
 #define EMERY_WIDTH 200
 #define EMERY_HEIGHT 228
 #define EMERY_CENTER_X 100
 #define EMERY_CENTER_Y 114
-
-// Perspective Time 2 projection clipping stage 11
-#define NEAR_CLIP_DISTANCE 40
-#define PROJECTION_MARGIN 4
-// Perspective Time 2 safe Q7 transform stage 14
-// Q8 overflowed int16_t after enlarging the digit plane.
-// Q7 keeps the full rotated geometry within the GPoint3 range.
-#define SHIFT 7
+#define SHIFT 8
 
 // Perspective Time 2 smooth low-latency stage 9
-// Perspective Time 2 hidden perspective stage 10
 #define SENSOR_RATE ACCEL_SAMPLING_50HZ
 #define FRAME_INTERVAL_MS 33
-#define ANGLE_DEADZONE (TRIG_MAX_ANGLE / 240)
 enum {
   CONFIG_KEY_NIGHTSTART = 3333,
   CONFIG_KEY_NIGHTSTOP = 3334
@@ -42,7 +32,6 @@ static int16_t smoothedAccelX = 0;
 static int16_t smoothedAccelY = 0;
 static int16_t smoothedAccelZ = 0;
 static bool smoothedAccelInitialized = false;
-static bool orientationInitialized = false;
 static int32_t a=0, b=0, c=0;
 static int32_t cosa, sina, cosb, sinb, cosc, sinc;
 static int hour;
@@ -275,25 +264,6 @@ static void angles(const GPoint3 *v, int32_t *ax, int32_t *ay, int32_t *az) {
   *az = 0;
 }
 
-static int32_t applyAngleDeadzone(
-    int32_t current,
-    int32_t target,
-    bool *changed) {
-  const int32_t difference = target - current;
-
-  if (difference > ANGLE_DEADZONE) {
-    *changed = true;
-    return target - ANGLE_DEADZONE;
-  }
-
-  if (difference < -ANGLE_DEADZONE) {
-    *changed = true;
-    return target + ANGLE_DEADZONE;
-  }
-
-  return current;
-}
-
 static inline void transformPoint(const GPoint3 *P, GPoint3 *T) {
   GPoint3 U;
 
@@ -314,40 +284,9 @@ static inline void transformPoint(const GPoint3 *P, GPoint3 *T) {
   T->z = U.z >> SHIFT;
 }
 
-static inline bool projectPoint(
-    const GPoint3 *T,
-    GPoint *S) {
-  const int32_t denominator =
-      (int32_t)eye.z + T->z;
-
-  // A zero, negative or very small denominator means that the point is
-  // behind or extremely close to the virtual camera plane. Projecting it
-  // would create huge wrapped coordinates and visible streaks.
-  if (denominator <= NEAR_CLIP_DISTANCE) {
-    return false;
-  }
-
-  const int32_t projectedX =
-      ((int32_t)eye.z * T->x) / denominator
-      + EMERY_CENTER_X;
-
-  const int32_t projectedY =
-      ((int32_t)eye.z * T->y) / denominator
-      + EMERY_CENTER_Y;
-
-  // Reject off-screen points before narrowing the coordinates to int16_t.
-  // This prevents integer wrapping while retaining points entering from
-  // the edge during the hidden-perspective movement.
-  if (projectedX < -PROJECTION_MARGIN
-      || projectedX >= EMERY_WIDTH + PROJECTION_MARGIN
-      || projectedY < -PROJECTION_MARGIN
-      || projectedY >= EMERY_HEIGHT + PROJECTION_MARGIN) {
-    return false;
-  }
-
-  S->x = (int16_t)projectedX;
-  S->y = (int16_t)projectedY;
-  return true;
+static inline void projectPoint(const GPoint3 *T, GPoint *S) {
+  S->x = (eye.z * T->x) / (eye.z + T->z) + EMERY_CENTER_X;
+  S->y = (eye.z * T->y) / (eye.z + T->z) + EMERY_CENTER_Y;
 }
 
 static void drawPoint(GContext *ctx, const GPoint3 *P) {
@@ -355,10 +294,7 @@ static void drawPoint(GContext *ctx, const GPoint3 *P) {
   GPoint3 T;
 
   transformPoint(P, &T);
-
-  if (!projectPoint(&T, &S)) {
-    return;
-  }
+  projectPoint(&T, &S);
 
   graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
 }
@@ -420,48 +356,16 @@ static void timerCallback(void *data) {
       smoothedAccelZ
     };
 
-    int32_t targetA;
-    int32_t targetB;
-    int32_t targetC;
+    angles(&smoothedVector, &a, &b, &c);
 
-    angles(
-        &smoothedVector,
-        &targetA,
-        &targetB,
-        &targetC);
+    cosa = cos_lookup(a);
+    cosb = cos_lookup(b);
+    cosc = cos_lookup(c);
+    sina = sin_lookup(a);
+    sinb = sin_lookup(b);
+    sinc = sin_lookup(c);
 
-    bool orientationChanged = false;
-
-    if (!orientationInitialized) {
-      a = targetA;
-      b = targetB;
-      c = targetC;
-      orientationInitialized = true;
-      orientationChanged = true;
-    } else {
-      a = applyAngleDeadzone(
-          a,
-          targetA,
-          &orientationChanged);
-
-      b = applyAngleDeadzone(
-          b,
-          targetB,
-          &orientationChanged);
-
-      c = targetC;
-    }
-
-    if (orientationChanged) {
-      cosa = cos_lookup(a);
-      cosb = cos_lookup(b);
-      cosc = cos_lookup(c);
-      sina = sin_lookup(a);
-      sinb = sin_lookup(b);
-      sinc = sin_lookup(c);
-
-      layer_mark_dirty(layer);
-    }
+    layer_mark_dirty(layer);
   }
 
   timer = app_timer_register(FRAME_INTERVAL_MS, timerCallback, NULL);
@@ -482,11 +386,6 @@ static void handleTick(struct tm *t, TimeUnits units_changed) {
   d[3] = t->tm_min%10;
   d[4] = t->tm_sec/10;
   d[5] = t->tm_sec%10;
-
-  // Keep seconds current even while the deadzone holds the view still.
-  if (layer) {
-    layer_mark_dirty(layer);
-  }
 }
 
 
