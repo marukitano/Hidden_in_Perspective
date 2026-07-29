@@ -8,6 +8,8 @@
 
 # Local patch backups
 /src/Perspective.c.before_*
+/package.json.before_*
+/wscript.before_*
 
 # Local screenshots; curated documentation images belong in docs/
 /screenshot*.png

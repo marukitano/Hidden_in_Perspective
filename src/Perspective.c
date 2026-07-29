@@ -1,6 +1,6 @@
 #include <pebble.h>
 
-// Perspective Time 2 repository cleanup stage 40
+// Pebble Time 2 (Emery) watchface with perspective date, battery and optional Swiss emblem.
 
 #define SIZE 76
 #define OFFSET 9
@@ -29,7 +29,12 @@
 #define AUX_BATTERY_X_DOT_STEP 2
 #define AUX_TOP_DEPTH_STEP 4
 #define AUX_BOTTOM_DEPTH_STEP 2
-#define AUX_DATE_PERIOD_SIZE 3
+#define AUX_DATE_EMBLEM_WIDTH 13
+#define AUX_DATE_EMBLEM_HEIGHT 14
+#define AUX_DATE_EMBLEM_X_STEP 1
+#define AUX_DATE_EMBLEM_DEPTH_STEP 1
+#define AUX_DATE_EMBLEM_DEPTH_OFFSET 3
+#define AUX_DATE_EMBLEM_DOT_SIZE 1
 #define AUX_TOP_HINGE_Y -178
 #define AUX_BOTTOM_HINGE_Y 186
 #define AUX_TOP_DEPTH_DIRECTION -1
@@ -48,6 +53,8 @@
 #define VISUAL_TILT_GAIN 2
 #define VISUAL_TILT_LIMIT ((TRIG_MAX_ANGLE_BY_4 * 77) / 90)
 #define CONFIG_KEY_INVERTED_THEME 3335
+#define CONFIG_KEY_SHOW_SWISS_EMBLEM 3336
+#define AUX_DATE_SEPARATOR_DOT_SIZE 3
 
 static const int32_t TRIG_MAX_ANGLE_BY_4 = TRIG_MAX_ANGLE / 4;
 
@@ -62,6 +69,7 @@ static int16_t smoothedAccelZ = 0;
 static bool smoothedAccelInitialized = false;
 static bool orientationInitialized = false;
 static bool invertedTheme = false;
+static bool showSwissEmblem = true;
 static AccelData previousShakeAccel;
 static bool havePreviousShakeAccel = false;
 static uint8_t shakeCooldownSamples = 0;
@@ -681,16 +689,342 @@ static void drawFoldedDigit(
   }
 }
 
+static bool projectDateEmblemCell(
+    int16_t column,
+    int16_t planeRow,
+    GPoint *screenPoint) {
+  const int16_t x =
+      (column - AUX_DATE_EMBLEM_WIDTH / 2)
+      * AUX_DATE_EMBLEM_X_STEP;
+
+  const int16_t depth =
+      AUX_TOP_DEPTH_OFFSET
+      + AUX_DATE_EMBLEM_DEPTH_OFFSET
+      + planeRow
+          * AUX_DATE_EMBLEM_DEPTH_STEP;
+
+  const GPoint3 point = {
+    x,
+    AUX_TOP_HINGE_Y,
+    ZPOS
+        + AUX_TOP_DEPTH_DIRECTION
+            * depth
+  };
+
+  return projectAuxPointHighPrecision(
+      &point,
+      screenPoint);
+}
+
+static GPoint s_dateEmblemStepX = {
+  1,
+  0
+};
+
+static GPoint s_dateEmblemStepDepth = {
+  0,
+  -1
+};
+
+static bool s_dateEmblemLatticeInitialized = false;
+static bool s_dateEmblemReverseRows = true;
+
+static bool quantizeDateEmblemAxis(
+    int16_t deltaX,
+    int16_t deltaY,
+    GPoint *step) {
+  const int16_t absoluteX =
+      deltaX < 0
+          ? -deltaX
+          : deltaX;
+
+  const int16_t absoluteY =
+      deltaY < 0
+          ? -deltaY
+          : deltaY;
+
+  if (absoluteX == 0
+      && absoluteY == 0) {
+    return false;
+  }
+
+  const int16_t signX =
+      deltaX < 0
+          ? -1
+          : deltaX > 0
+              ? 1
+              : 0;
+
+  const int16_t signY =
+      deltaY < 0
+          ? -1
+          : deltaY > 0
+              ? 1
+              : 0;
+
+  if (absoluteX >= absoluteY * 2) {
+    step->x = signX;
+    step->y = 0;
+  } else if (absoluteY >= absoluteX * 2) {
+    step->x = 0;
+    step->y = signY;
+  } else {
+    step->x = signX;
+    step->y = signY;
+  }
+
+  return true;
+}
+
+static bool getDateEmblemLattice(
+    GPoint *origin,
+    GPoint *stepX,
+    GPoint *stepDepth,
+    bool *reverseRows) {
+  GPoint firstCell;
+  GPoint lastColumnCell;
+  GPoint lastDepthCell;
+
+  if (!projectDateEmblemCell(
+          0,
+          0,
+          &firstCell)
+      || !projectDateEmblemCell(
+          AUX_DATE_EMBLEM_WIDTH - 1,
+          0,
+          &lastColumnCell)
+      || !projectDateEmblemCell(
+          0,
+          AUX_DATE_EMBLEM_HEIGHT - 1,
+          &lastDepthCell)) {
+    return false;
+  }
+
+  const int16_t totalXx =
+      lastColumnCell.x - firstCell.x;
+
+  const int16_t totalXy =
+      lastColumnCell.y - firstCell.y;
+
+  const int16_t totalDepthX =
+      lastDepthCell.x - firstCell.x;
+
+  const int16_t totalDepthY =
+      lastDepthCell.y - firstCell.y;
+
+  GPoint candidateStepX;
+  GPoint candidateStepDepth;
+
+  const bool haveStepX =
+      quantizeDateEmblemAxis(
+          totalXx,
+          totalXy,
+          &candidateStepX);
+
+  const bool haveStepDepth =
+      quantizeDateEmblemAxis(
+          totalDepthX,
+          totalDepthY,
+          &candidateStepDepth);
+
+  if (haveStepX) {
+    s_dateEmblemStepX =
+        candidateStepX;
+  }
+
+  if (haveStepDepth) {
+    s_dateEmblemStepDepth =
+        candidateStepDepth;
+  }
+
+  /*
+   * A quantized pair must span an area. If both axes collapse onto the
+   * same pixel direction, choose the perpendicular direction that best
+   * agrees with the full projected depth vector.
+   */
+  const int16_t cross =
+      s_dateEmblemStepX.x
+          * s_dateEmblemStepDepth.y
+      - s_dateEmblemStepX.y
+          * s_dateEmblemStepDepth.x;
+
+  if (cross == 0) {
+    const GPoint candidateA = {
+      -s_dateEmblemStepX.y,
+      s_dateEmblemStepX.x
+    };
+
+    const GPoint candidateB = {
+      s_dateEmblemStepX.y,
+      -s_dateEmblemStepX.x
+    };
+
+    const int32_t dotA =
+        (int32_t)candidateA.x
+            * totalDepthX
+        + (int32_t)candidateA.y
+            * totalDepthY;
+
+    const int32_t dotB =
+        (int32_t)candidateB.x
+            * totalDepthX
+        + (int32_t)candidateB.y
+            * totalDepthY;
+
+    s_dateEmblemStepDepth =
+        dotA >= dotB
+            ? candidateA
+            : candidateB;
+  }
+
+  /*
+   * Do not change texture orientation while the plane is almost edge-on.
+   * Only switch row order after a clear two-pixel vertical displacement.
+   */
+  if (!s_dateEmblemLatticeInitialized) {
+    s_dateEmblemReverseRows =
+        totalDepthY <= 0;
+
+    s_dateEmblemLatticeInitialized =
+        true;
+  } else if (totalDepthY <= -2) {
+    s_dateEmblemReverseRows =
+        true;
+  } else if (totalDepthY >= 2) {
+    s_dateEmblemReverseRows =
+        false;
+  }
+
+  *origin =
+      firstCell;
+
+  *stepX =
+      s_dateEmblemStepX;
+
+  *stepDepth =
+      s_dateEmblemStepDepth;
+
+  *reverseRows =
+      s_dateEmblemReverseRows;
+
+  return true;
+}
+
 static void drawDateSeparator(
     GContext *ctx) {
-  // A deliberately larger period so DD.MM remains visible on the
-  // strongly foreshortened top plane.
-  drawFoldedCellSized(
+  if (!showSwissEmblem) {
+    /*
+     * Restore the original DD.MM separator:
+     * one point at row zero of the folded date plane.
+     */
+    drawFoldedCellSized(
+        ctx,
+        0,
+        0,
+        true,
+        AUX_DATE_SEPARATOR_DOT_SIZE);
+
+    return;
+  }
+  static const char *const SWISS_EMBLEM_ROWS[14] = {
+    "..RRRRRRRRR..",
+    ".RRRRWWWRRRR.",
+    ".RRRRWWWRRRR.",
+    ".RRRRWWWRRRR.",
+    ".RWWWWWWWWWR.",
+    ".RWWWWWWWWWR.",
+    ".RWWWWWWWWWR.",
+    ".RRRRWWWRRRR.",
+    ".RRRRWWWRRRR.",
+    "..RRRWWWRRR..",
+    "..RRRRRRRRR..",
+    "....RRRRR....",
+    ".....RRR.....",
+    "......R......"
+  };
+
+  GPoint origin;
+  GPoint stepX;
+  GPoint stepDepth;
+  bool reverseRows;
+
+  if (!getDateEmblemLattice(
+          &origin,
+          &stepX,
+          &stepDepth,
+          &reverseRows)) {
+    return;
+  }
+
+  /*
+   * Red first, white second, so the cross remains visible on top.
+   */
+  static const char symbols[2] = {
+    'R',
+    'W'
+  };
+
+  for (int16_t pass = 0;
+       pass < 2;
+       ++pass) {
+    const char wantedSymbol =
+        symbols[pass];
+
+    graphics_context_set_fill_color(
+        ctx,
+        wantedSymbol == 'W'
+            ? GColorWhite
+            : GColorRed);
+
+    for (int16_t planeRow = 0;
+         planeRow < AUX_DATE_EMBLEM_HEIGHT;
+         ++planeRow) {
+      const int16_t sourceRow =
+          reverseRows
+              ? AUX_DATE_EMBLEM_HEIGHT
+                  - 1
+                  - planeRow
+              : planeRow;
+
+      for (int16_t column = 0;
+           column < AUX_DATE_EMBLEM_WIDTH;
+           ++column) {
+        if (SWISS_EMBLEM_ROWS[sourceRow][column]
+                != wantedSymbol) {
+          continue;
+        }
+
+        const int16_t screenX =
+            origin.x
+            + column * stepX.x
+            + planeRow * stepDepth.x;
+
+        const int16_t screenY =
+            origin.y
+            + column * stepX.y
+            + planeRow * stepDepth.y;
+
+        graphics_fill_rect(
+            ctx,
+            GRect(
+                screenX,
+                screenY,
+                AUX_DATE_EMBLEM_DOT_SIZE,
+                AUX_DATE_EMBLEM_DOT_SIZE),
+            0,
+            GCornerNone);
+      }
+    }
+  }
+
+  const GColor normalColor =
+      invertedTheme
+          ? GColorBlack
+          : GColorWhite;
+
+  graphics_context_set_fill_color(
       ctx,
-      0,
-      0,
-      true,
-      AUX_DATE_PERIOD_SIZE);
+      normalColor);
 }
 
 static void drawPercentSign(
@@ -728,10 +1062,10 @@ static void drawPercentSign(
 static void drawDatePlane(
     GContext *ctx) {
   static const int16_t positions[4] = {
-    -78,
-    -30,
-    30,
-    78
+    -84,
+    -36,
+    36,
+    84
   };
 
   for (int index = 0; index < 4; ++index) {
@@ -1084,6 +1418,39 @@ static void initDigitOffsets() {
   }
 }
 
+static void handleSettingsReceived(
+    DictionaryIterator *iterator,
+    void *context) {
+  (void)context;
+
+  Tuple *showEmblemTuple =
+      dict_find(
+          iterator,
+          MESSAGE_KEY_ShowEmblem);
+
+  if (!showEmblemTuple) {
+    return;
+  }
+
+  showSwissEmblem =
+      showEmblemTuple->value->int32 != 0;
+
+  persist_write_bool(
+      CONFIG_KEY_SHOW_SWISS_EMBLEM,
+      showSwissEmblem);
+
+  if (layer) {
+    layer_mark_dirty(layer);
+  }
+
+  APP_LOG(
+      APP_LOG_LEVEL_INFO,
+      "Swiss emblem: %s",
+      showSwissEmblem
+          ? "enabled"
+          : "disabled");
+}
+
 static void init(void) {
   time_t now;
 
@@ -1095,6 +1462,14 @@ static void init(void) {
         CONFIG_KEY_INVERTED_THEME);
   } else {
     invertedTheme = false;
+  }
+
+  if (persist_exists(CONFIG_KEY_SHOW_SWISS_EMBLEM)) {
+    showSwissEmblem =
+        persist_read_bool(
+            CONFIG_KEY_SHOW_SWISS_EMBLEM);
+  } else {
+    showSwissEmblem = true;
   }
 
   time(&now);
@@ -1110,6 +1485,13 @@ static void init(void) {
   layer_add_child(rootLayer, layer);
 
   tick_timer_service_subscribe(SECOND_UNIT, handleTick);
+
+  app_message_register_inbox_received(
+      handleSettingsReceived);
+
+  app_message_open(
+      64,
+      64);
   
   accel_service_set_sampling_rate(SENSOR_RATE);
   accel_data_service_subscribe(1, handleAccel);
@@ -1120,6 +1502,7 @@ static void deinit(void) {
   app_timer_cancel(timer);
   accel_data_service_unsubscribe();
   tick_timer_service_unsubscribe();
+  app_message_deregister_callbacks();
   layer_destroy(layer);
   window_destroy(window);
 }
