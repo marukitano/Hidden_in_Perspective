@@ -1,7 +1,7 @@
 {
   "name": "Perspective",
-  "author": "Jnm",
-  "version": "1.3.0",
+  "author": "Marukitano",
+  "version": "1.0.0",
   "private": true,
   "keywords": [
     "pebble-app"
@@ -14,8 +14,8 @@
     ],
     "capabilities": [],
     "projectType": "native",
-    "displayName": "Perspective",
-    "uuid": "d4f886e0-a4f4-49d0-8492-2ce6e27d7f0a",
+    "displayName": "Hidden in Perspective",
+    "uuid": "8221948b-adec-4ac9-8bb6-39e78048cf3f",
     "watchapp": {
       "watchface": true,
       "hiddenApp": false,
