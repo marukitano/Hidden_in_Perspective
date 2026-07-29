@@ -66,8 +66,6 @@
 // Perspective Time 2 visual tilt limited to 80 percent stage 36
 // Perspective Time 2 visual tilt limited to 77 degrees stage 37
 // Perspective Time 2 reduced battery distance stage 38
-// Perspective Time 2 high precision auxiliary projection stage 39
-// Perspective Time 2 signed fixed-point shift fix stage 39b
 #define VISUAL_TILT_GAIN 2
 #define VISUAL_TILT_LIMIT ((TRIG_MAX_ANGLE_BY_4 * 77) / 90)
 enum {
@@ -460,130 +458,17 @@ static void drawPoint(GContext *ctx, const GPoint3 *P) {
   graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
 }
 
-static int32_t divideRoundedSigned64(
-    int64_t numerator,
-    int32_t denominator) {
-  if (numerator >= 0) {
-    return (int32_t)(
-        (numerator + denominator / 2)
-        / denominator);
-  }
-
-  return (int32_t)(
-      (numerator - denominator / 2)
-      / denominator);
-}
-
-static bool projectAuxPointHighPrecision(
-    const GPoint3 *point,
-    GPoint *screenPoint) {
-  // Keep every rotated coordinate in Q7 fixed-point form.
-  const int32_t fixedOne =
-      ((int32_t)1) << SHIFT;
-
-  const int32_t xQ =
-      ((int32_t)point->x) * fixedOne;
-
-  const int32_t yQ =
-      ((int32_t)point->y
-          - PERSPECTIVE_PIVOT_Y)
-      * fixedOne;
-
-  const int32_t zQ =
-      ((int32_t)point->z
-          - PERSPECTIVE_PIVOT_Z)
-      * fixedOne;
-
-  const int32_t xRotationYQ =
-      (int32_t)(
-          ((int64_t)yQ * cosa
-              + (int64_t)zQ * sina)
-          / TRIG_MAX_RATIO);
-
-  const int32_t xRotationZQ =
-      (int32_t)(
-          ((int64_t)zQ * cosa
-              - (int64_t)yQ * sina)
-          / TRIG_MAX_RATIO);
-
-  const int32_t yRotationXQ =
-      (int32_t)(
-          ((int64_t)xQ * cosb
-              - (int64_t)xRotationZQ * sinb)
-          / TRIG_MAX_RATIO);
-
-  const int32_t yRotationZQ =
-      (int32_t)(
-          ((int64_t)xQ * sinb
-              + (int64_t)xRotationZQ * cosb)
-          / TRIG_MAX_RATIO);
-
-  const int32_t rotatedXQ =
-      (int32_t)(
-          ((int64_t)yRotationXQ * cosc
-              + (int64_t)xRotationYQ * sinc)
-          / TRIG_MAX_RATIO);
-
-  const int32_t rotatedYQ =
-      (int32_t)(
-          ((int64_t)xRotationYQ * cosc
-              - (int64_t)yRotationXQ * sinc)
-          / TRIG_MAX_RATIO);
-
-  const int32_t worldYQ =
-      rotatedYQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Y
-          * fixedOne);
-
-  const int32_t worldZQ =
-      yRotationZQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Z
-          * fixedOne);
-
-  const int32_t denominatorQ =
-      ((int32_t)eye.z * fixedOne)
-      + worldZQ;
-
-  if (denominatorQ
-      <= (NEAR_CLIP_DISTANCE * fixedOne)) {
-    return false;
-  }
-
-  // Round only here, when converting the final projection to display pixels.
-  const int32_t projectedX =
-      divideRoundedSigned64(
-          (int64_t)eye.z * rotatedXQ,
-          denominatorQ)
-      + EMERY_CENTER_X;
-
-  const int32_t projectedY =
-      divideRoundedSigned64(
-          (int64_t)eye.z * worldYQ,
-          denominatorQ)
-      + EMERY_CENTER_Y;
-
-  if (projectedX < -PROJECTION_MARGIN
-      || projectedX
-          >= EMERY_WIDTH + PROJECTION_MARGIN
-      || projectedY < -PROJECTION_MARGIN
-      || projectedY
-          >= EMERY_HEIGHT + PROJECTION_MARGIN) {
-    return false;
-  }
-
-  screenPoint->x = (int16_t)projectedX;
-  screenPoint->y = (int16_t)projectedY;
-  return true;
-}
-
 static void drawAuxProjectedPoint(
     GContext *ctx,
     const GPoint3 *point,
     int16_t dotSize) {
+  GPoint3 transformedPoint;
   GPoint screenPoint;
 
-  if (!projectAuxPointHighPrecision(
-          point,
+  transformPoint(point, &transformedPoint);
+
+  if (!projectPoint(
+          &transformedPoint,
           &screenPoint)) {
     return;
   }

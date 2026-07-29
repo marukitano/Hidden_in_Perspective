@@ -33,23 +33,19 @@
 // Perspective Time 2 centered rotation pivot stage 27
 // Perspective Time 2 smaller battery plane stage 28
 // Perspective Time 2 final layout tuning stage 29
-// Perspective Time 2 date gap and readable battery dots stage 30
-// Perspective Time 2 uniform battery grid stage 31
-// Perspective Time 2 date pair spacing stage 32
-// Perspective Time 2 stronger date pair spacing stage 33
-// Perspective Time 2 battery digits centered without percent stage 34
 #define PERSPECTIVE_PIVOT_Y -16
 #define PERSPECTIVE_PIVOT_Z ZPOS
 
 #define AUX_DATE_DOT_SIZE 2
-#define AUX_BATTERY_DOT_SIZE 2
+#define AUX_BATTERY_DOT_SIZE 1
 #define AUX_DATE_X_DOT_STEP 5
-#define AUX_BATTERY_X_DOT_STEP 2
+#define AUX_BATTERY_X_DOT_STEP 3
+#define AUX_BATTERY_SCALE_DIVISOR 2
 #define AUX_TOP_DEPTH_STEP 4
-#define AUX_BOTTOM_DEPTH_STEP 2
+#define AUX_BOTTOM_DEPTH_STEP 3
 #define AUX_DATE_PERIOD_SIZE 3
 #define AUX_TOP_HINGE_Y -178
-#define AUX_BOTTOM_HINGE_Y 186
+#define AUX_BOTTOM_HINGE_Y 194
 #define AUX_TOP_DEPTH_DIRECTION -1
 #define AUX_BOTTOM_DEPTH_DIRECTION 1
 #define AUX_TOP_DEPTH_OFFSET 28
@@ -62,14 +58,6 @@
 #define SHAKE_DELTA_THRESHOLD 1800
 #define SHAKE_COOLDOWN_SAMPLES 50
 #define ANGLE_DEADZONE (TRIG_MAX_ANGLE / 240)
-// Perspective Time 2 doubled visual tilt gain stage 35
-// Perspective Time 2 visual tilt limited to 80 percent stage 36
-// Perspective Time 2 visual tilt limited to 77 degrees stage 37
-// Perspective Time 2 reduced battery distance stage 38
-// Perspective Time 2 high precision auxiliary projection stage 39
-// Perspective Time 2 signed fixed-point shift fix stage 39b
-#define VISUAL_TILT_GAIN 2
-#define VISUAL_TILT_LIMIT ((TRIG_MAX_ANGLE_BY_4 * 77) / 90)
 enum {
   CONFIG_KEY_NIGHTSTART = 3333,
   CONFIG_KEY_NIGHTSTOP = 3334,
@@ -327,23 +315,6 @@ static void angles(const GPoint3 *v, int32_t *ax, int32_t *ay, int32_t *az) {
   *az = 0;
 }
 
-static int32_t applyVisualTiltGain(
-    int32_t angle) {
-  int32_t amplified =
-      angle * VISUAL_TILT_GAIN;
-
-  if (amplified > VISUAL_TILT_LIMIT) {
-    return VISUAL_TILT_LIMIT;
-  }
-
-  if (amplified < -VISUAL_TILT_LIMIT) {
-    return -VISUAL_TILT_LIMIT;
-  }
-
-  return amplified;
-}
-
-
 static int32_t applyAngleDeadzone(
     int32_t current,
     int32_t target,
@@ -460,130 +431,17 @@ static void drawPoint(GContext *ctx, const GPoint3 *P) {
   graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
 }
 
-static int32_t divideRoundedSigned64(
-    int64_t numerator,
-    int32_t denominator) {
-  if (numerator >= 0) {
-    return (int32_t)(
-        (numerator + denominator / 2)
-        / denominator);
-  }
-
-  return (int32_t)(
-      (numerator - denominator / 2)
-      / denominator);
-}
-
-static bool projectAuxPointHighPrecision(
-    const GPoint3 *point,
-    GPoint *screenPoint) {
-  // Keep every rotated coordinate in Q7 fixed-point form.
-  const int32_t fixedOne =
-      ((int32_t)1) << SHIFT;
-
-  const int32_t xQ =
-      ((int32_t)point->x) * fixedOne;
-
-  const int32_t yQ =
-      ((int32_t)point->y
-          - PERSPECTIVE_PIVOT_Y)
-      * fixedOne;
-
-  const int32_t zQ =
-      ((int32_t)point->z
-          - PERSPECTIVE_PIVOT_Z)
-      * fixedOne;
-
-  const int32_t xRotationYQ =
-      (int32_t)(
-          ((int64_t)yQ * cosa
-              + (int64_t)zQ * sina)
-          / TRIG_MAX_RATIO);
-
-  const int32_t xRotationZQ =
-      (int32_t)(
-          ((int64_t)zQ * cosa
-              - (int64_t)yQ * sina)
-          / TRIG_MAX_RATIO);
-
-  const int32_t yRotationXQ =
-      (int32_t)(
-          ((int64_t)xQ * cosb
-              - (int64_t)xRotationZQ * sinb)
-          / TRIG_MAX_RATIO);
-
-  const int32_t yRotationZQ =
-      (int32_t)(
-          ((int64_t)xQ * sinb
-              + (int64_t)xRotationZQ * cosb)
-          / TRIG_MAX_RATIO);
-
-  const int32_t rotatedXQ =
-      (int32_t)(
-          ((int64_t)yRotationXQ * cosc
-              + (int64_t)xRotationYQ * sinc)
-          / TRIG_MAX_RATIO);
-
-  const int32_t rotatedYQ =
-      (int32_t)(
-          ((int64_t)xRotationYQ * cosc
-              - (int64_t)yRotationXQ * sinc)
-          / TRIG_MAX_RATIO);
-
-  const int32_t worldYQ =
-      rotatedYQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Y
-          * fixedOne);
-
-  const int32_t worldZQ =
-      yRotationZQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Z
-          * fixedOne);
-
-  const int32_t denominatorQ =
-      ((int32_t)eye.z * fixedOne)
-      + worldZQ;
-
-  if (denominatorQ
-      <= (NEAR_CLIP_DISTANCE * fixedOne)) {
-    return false;
-  }
-
-  // Round only here, when converting the final projection to display pixels.
-  const int32_t projectedX =
-      divideRoundedSigned64(
-          (int64_t)eye.z * rotatedXQ,
-          denominatorQ)
-      + EMERY_CENTER_X;
-
-  const int32_t projectedY =
-      divideRoundedSigned64(
-          (int64_t)eye.z * worldYQ,
-          denominatorQ)
-      + EMERY_CENTER_Y;
-
-  if (projectedX < -PROJECTION_MARGIN
-      || projectedX
-          >= EMERY_WIDTH + PROJECTION_MARGIN
-      || projectedY < -PROJECTION_MARGIN
-      || projectedY
-          >= EMERY_HEIGHT + PROJECTION_MARGIN) {
-    return false;
-  }
-
-  screenPoint->x = (int16_t)projectedX;
-  screenPoint->y = (int16_t)projectedY;
-  return true;
-}
-
 static void drawAuxProjectedPoint(
     GContext *ctx,
     const GPoint3 *point,
     int16_t dotSize) {
+  GPoint3 transformedPoint;
   GPoint screenPoint;
 
-  if (!projectAuxPointHighPrecision(
-          point,
+  transformPoint(point, &transformedPoint);
+
+  if (!projectPoint(
+          &transformedPoint,
           &screenPoint)) {
     return;
   }
@@ -612,11 +470,17 @@ static void drawFoldedCellSized(
       ? AUX_TOP_HINGE_Y
       : AUX_BOTTOM_HINGE_Y;
 
-  const int16_t depth =
-      topPlane
-      ? row * AUX_TOP_DEPTH_STEP
-          + AUX_TOP_DEPTH_OFFSET
-      : row * AUX_BOTTOM_DEPTH_STEP;
+  int16_t depth;
+
+  if (topPlane) {
+    depth =
+        row * AUX_TOP_DEPTH_STEP
+        + AUX_TOP_DEPTH_OFFSET;
+  } else {
+    depth =
+        (row * AUX_BOTTOM_DEPTH_STEP)
+        / AUX_BATTERY_SCALE_DIVISOR;
+  }
 
   point.z = ZPOS
       + (topPlane
@@ -650,11 +514,6 @@ static void drawFoldedDigit(
     int16_t centerX,
     bool topPlane,
     bool reverseRows) {
-  const int16_t xStep =
-      topPlane
-      ? AUX_DATE_X_DOT_STEP
-      : AUX_BATTERY_X_DOT_STEP;
-
   for (int16_t row = 0; row < 9; ++row) {
     const int16_t sourceRow =
         reverseRows ? 8 - row : row;
@@ -669,13 +528,18 @@ static void drawFoldedDigit(
         continue;
       }
 
-      const int16_t x =
-          centerX
-          + (column - 4) * xStep;
+      const int16_t columnOffset =
+          column - 4;
+
+      const int16_t xOffset =
+          topPlane
+          ? columnOffset * AUX_DATE_X_DOT_STEP
+          : (columnOffset * AUX_BATTERY_X_DOT_STEP)
+              / AUX_BATTERY_SCALE_DIVISOR;
 
       drawFoldedCell(
           ctx,
-          x,
+          centerX + xOffset,
           row,
           topPlane);
     }
@@ -729,10 +593,10 @@ static void drawPercentSign(
 static void drawDatePlane(
     GContext *ctx) {
   static const int16_t positions[4] = {
-    -78,
-    -30,
-    30,
-    78
+    -72,
+    -28,
+    28,
+    72
   };
 
   for (int index = 0; index < 4; ++index) {
@@ -750,65 +614,59 @@ static void drawDatePlane(
 static void drawBatteryPlane(
     GContext *ctx) {
   if (batteryPercent >= 100) {
-    // Center the three digits themselves around x = 0.
     drawFoldedDigit(
         ctx,
         1,
-        -20,
+        -24,
         false,
         false);
 
     drawFoldedDigit(
         ctx,
         0,
-        0,
+        -8,
         false,
         false);
 
     drawFoldedDigit(
         ctx,
         0,
-        20,
+        8,
         false,
         false);
 
-    // Percent sign sits to the right and does not influence centering.
     drawPercentSign(
         ctx,
-        40);
+        24);
   } else if (batteryPercent >= 10) {
-    // Center the midpoint between the two digits around x = 0.
     drawFoldedDigit(
         ctx,
         batteryPercent / 10,
-        -10,
+        -16,
         false,
         false);
 
     drawFoldedDigit(
         ctx,
         batteryPercent % 10,
-        10,
-        false,
-        false);
-
-    // Percent sign sits to the right and does not influence centering.
-    drawPercentSign(
-        ctx,
-        30);
-  } else {
-    // Center the single digit itself around x = 0.
-    drawFoldedDigit(
-        ctx,
-        batteryPercent,
         0,
         false,
         false);
 
-    // Percent sign sits to the right and does not influence centering.
     drawPercentSign(
         ctx,
-        20);
+        16);
+  } else {
+    drawFoldedDigit(
+        ctx,
+        batteryPercent,
+        -8,
+        false,
+        false);
+
+    drawPercentSign(
+        ctx,
+        8);
   }
 }
 
@@ -893,11 +751,6 @@ static void timerCallback(void *data) {
         &targetA,
         &targetB,
         &targetC);
-
-    // Amplify only the visual perspective. Raw sensor values
-    // remain untouched for smoothing and shake detection.
-    targetA = applyVisualTiltGain(targetA);
-    targetB = applyVisualTiltGain(targetB);
 
     bool orientationChanged = false;
 

@@ -67,7 +67,6 @@
 // Perspective Time 2 visual tilt limited to 77 degrees stage 37
 // Perspective Time 2 reduced battery distance stage 38
 // Perspective Time 2 high precision auxiliary projection stage 39
-// Perspective Time 2 signed fixed-point shift fix stage 39b
 #define VISUAL_TILT_GAIN 2
 #define VISUAL_TILT_LIMIT ((TRIG_MAX_ANGLE_BY_4 * 77) / 90)
 enum {
@@ -478,21 +477,18 @@ static bool projectAuxPointHighPrecision(
     const GPoint3 *point,
     GPoint *screenPoint) {
   // Keep every rotated coordinate in Q7 fixed-point form.
-  const int32_t fixedOne =
-      ((int32_t)1) << SHIFT;
-
   const int32_t xQ =
-      ((int32_t)point->x) * fixedOne;
+      ((int32_t)point->x) << SHIFT;
 
   const int32_t yQ =
       ((int32_t)point->y
           - PERSPECTIVE_PIVOT_Y)
-      * fixedOne;
+      << SHIFT;
 
   const int32_t zQ =
       ((int32_t)point->z
           - PERSPECTIVE_PIVOT_Z)
-      * fixedOne;
+      << SHIFT;
 
   const int32_t xRotationYQ =
       (int32_t)(
@@ -532,20 +528,20 @@ static bool projectAuxPointHighPrecision(
 
   const int32_t worldYQ =
       rotatedYQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Y
-          * fixedOne);
+      + (((int32_t)PERSPECTIVE_PIVOT_Y)
+          << SHIFT);
 
   const int32_t worldZQ =
       yRotationZQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Z
-          * fixedOne);
+      + (((int32_t)PERSPECTIVE_PIVOT_Z)
+          << SHIFT);
 
   const int32_t denominatorQ =
-      ((int32_t)eye.z * fixedOne)
+      (((int32_t)eye.z) << SHIFT)
       + worldZQ;
 
   if (denominatorQ
-      <= (NEAR_CLIP_DISTANCE * fixedOne)) {
+      <= (NEAR_CLIP_DISTANCE << SHIFT)) {
     return false;
   }
 

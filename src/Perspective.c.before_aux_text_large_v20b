@@ -16,64 +16,27 @@
 // Perspective Time 2 projection clipping stage 11
 #define NEAR_CLIP_DISTANCE 40
 #define PROJECTION_MARGIN 4
-// Perspective Time 2 shake-controlled theme stage 26
 // Perspective Time 2 safe Q7 transform stage 14
 // Q8 overflowed int16_t after enlarging the digit plane.
 // Q7 keeps the full rotated geometry within the GPoint3 range.
 // Perspective Time 2 folded date and battery planes stage 19b
-// Perspective Time 2 larger folded auxiliary text stage 20b
-// Perspective Time 2 increased auxiliary plane spacing stage 21
-// Perspective Time 2 corrected auxiliary spacing stage 22
-// Perspective Time 2 dotted auxiliary glyphs and date period stage 23
-// Perspective Time 2 separated date point cloud stage 24
-// Perspective Time 2 percent-sign step fix stage 24b
-// Perspective Time 2 corrected dotted date plane stage 25
-// Perspective Time 2 percent horizontal step fix stage 25b
 #define SHIFT 7
-// Perspective Time 2 centered rotation pivot stage 27
-// Perspective Time 2 smaller battery plane stage 28
-// Perspective Time 2 final layout tuning stage 29
-// Perspective Time 2 date gap and readable battery dots stage 30
-// Perspective Time 2 uniform battery grid stage 31
-// Perspective Time 2 date pair spacing stage 32
-// Perspective Time 2 stronger date pair spacing stage 33
-// Perspective Time 2 battery digits centered without percent stage 34
-#define PERSPECTIVE_PIVOT_Y -16
-#define PERSPECTIVE_PIVOT_Z ZPOS
 
-#define AUX_DATE_DOT_SIZE 2
-#define AUX_BATTERY_DOT_SIZE 2
-#define AUX_DATE_X_DOT_STEP 5
-#define AUX_BATTERY_X_DOT_STEP 2
-#define AUX_TOP_DEPTH_STEP 4
-#define AUX_BOTTOM_DEPTH_STEP 2
-#define AUX_DATE_PERIOD_SIZE 3
-#define AUX_TOP_HINGE_Y -178
-#define AUX_BOTTOM_HINGE_Y 186
+#define AUX_DOT_SIZE 2
+#define AUX_DOT_STEP 2
+#define AUX_TOP_HINGE_Y -142
+#define AUX_BOTTOM_HINGE_Y 142
 #define AUX_TOP_DEPTH_DIRECTION -1
 #define AUX_BOTTOM_DEPTH_DIRECTION 1
-#define AUX_TOP_DEPTH_OFFSET 28
 
 // Perspective Time 2 smooth low-latency stage 9
 // Perspective Time 2 hidden perspective stage 10
 #define SENSOR_RATE ACCEL_SAMPLING_50HZ
 #define FRAME_INTERVAL_MS 33
-// Shake detection uses change between consecutive 50 Hz samples.
-#define SHAKE_DELTA_THRESHOLD 1800
-#define SHAKE_COOLDOWN_SAMPLES 50
 #define ANGLE_DEADZONE (TRIG_MAX_ANGLE / 240)
-// Perspective Time 2 doubled visual tilt gain stage 35
-// Perspective Time 2 visual tilt limited to 80 percent stage 36
-// Perspective Time 2 visual tilt limited to 77 degrees stage 37
-// Perspective Time 2 reduced battery distance stage 38
-// Perspective Time 2 high precision auxiliary projection stage 39
-// Perspective Time 2 signed fixed-point shift fix stage 39b
-#define VISUAL_TILT_GAIN 2
-#define VISUAL_TILT_LIMIT ((TRIG_MAX_ANGLE_BY_4 * 77) / 90)
 enum {
   CONFIG_KEY_NIGHTSTART = 3333,
-  CONFIG_KEY_NIGHTSTOP = 3334,
-  CONFIG_KEY_INVERTED_THEME = 3335
+  CONFIG_KEY_NIGHTSTOP = 3334
 };
 
 static const int32_t TRIG_MAX_ANGLE_BY_4 = TRIG_MAX_ANGLE / 4;
@@ -88,10 +51,6 @@ static int16_t smoothedAccelY = 0;
 static int16_t smoothedAccelZ = 0;
 static bool smoothedAccelInitialized = false;
 static bool orientationInitialized = false;
-static bool invertedTheme = false;
-static AccelData previousShakeAccel;
-static bool havePreviousShakeAccel = false;
-static uint8_t shakeCooldownSamples = 0;
 static int32_t a=0, b=0, c=0;
 static int32_t cosa, sina, cosb, sinb, cosc, sinc;
 static int hour;
@@ -327,23 +286,6 @@ static void angles(const GPoint3 *v, int32_t *ax, int32_t *ay, int32_t *az) {
   *az = 0;
 }
 
-static int32_t applyVisualTiltGain(
-    int32_t angle) {
-  int32_t amplified =
-      angle * VISUAL_TILT_GAIN;
-
-  if (amplified > VISUAL_TILT_LIMIT) {
-    return VISUAL_TILT_LIMIT;
-  }
-
-  if (amplified < -VISUAL_TILT_LIMIT) {
-    return -VISUAL_TILT_LIMIT;
-  }
-
-  return amplified;
-}
-
-
 static int32_t applyAngleDeadzone(
     int32_t current,
     int32_t target,
@@ -363,52 +305,24 @@ static int32_t applyAngleDeadzone(
   return current;
 }
 
-static inline void transformPoint(
-    const GPoint3 *P,
-    GPoint3 *T) {
+static inline void transformPoint(const GPoint3 *P, GPoint3 *T) {
   GPoint3 U;
 
-  // Move the complete geometry to the time-plane center before rotation.
   U.x = P->x << SHIFT;
-  U.y =
-      (P->y - PERSPECTIVE_PIVOT_Y)
-      << SHIFT;
-  U.z =
-      (P->z - PERSPECTIVE_PIVOT_Z)
-      << SHIFT;
+  U.y = P->y << SHIFT;
+  U.z = P->z << SHIFT;
 
   T->x = U.x;
-  T->y =
-      (U.y * cosa + U.z * sina)
-      / TRIG_MAX_RATIO;
-  T->z =
-      (U.z * cosa - U.y * sina)
-      / TRIG_MAX_RATIO;
+  T->y = (U.y*cosa + U.z*sina) / TRIG_MAX_RATIO;
+  T->z = (U.z*cosa - U.y*sina) / TRIG_MAX_RATIO;
 
-  U.x =
-      (T->x * cosb - T->z * sinb)
-      / TRIG_MAX_RATIO;
+  U.x = (T->x*cosb - T->z*sinb) / TRIG_MAX_RATIO;
   U.y = T->y;
-  U.z =
-      (T->x * sinb + T->z * cosb)
-      / TRIG_MAX_RATIO;
+  U.z = (T->x*sinb + T->z*cosb) / TRIG_MAX_RATIO;
 
-  const int32_t rotatedX =
-      (U.x * cosc + U.y * sinc)
-      / TRIG_MAX_RATIO;
-
-  const int32_t rotatedY =
-      (U.y * cosc - U.x * sinc)
-      / TRIG_MAX_RATIO;
-
-  // Move the geometry back after rotation.
-  T->x = rotatedX >> SHIFT;
-  T->y =
-      (rotatedY >> SHIFT)
-      + PERSPECTIVE_PIVOT_Y;
-  T->z =
-      (U.z >> SHIFT)
-      + PERSPECTIVE_PIVOT_Z;
+  T->x = ((U.x*cosc + U.y*sinc) / TRIG_MAX_RATIO) >> SHIFT;
+  T->y = ((U.y*cosc - U.x*sinc) / TRIG_MAX_RATIO) >> SHIFT;
+  T->z = U.z >> SHIFT;
 }
 
 static inline bool projectPoint(
@@ -460,130 +374,16 @@ static void drawPoint(GContext *ctx, const GPoint3 *P) {
   graphics_fill_rect(ctx, GRect(S.x-1, S.y-1, 4, 4), 0, GCornerNone);
 }
 
-static int32_t divideRoundedSigned64(
-    int64_t numerator,
-    int32_t denominator) {
-  if (numerator >= 0) {
-    return (int32_t)(
-        (numerator + denominator / 2)
-        / denominator);
-  }
-
-  return (int32_t)(
-      (numerator - denominator / 2)
-      / denominator);
-}
-
-static bool projectAuxPointHighPrecision(
-    const GPoint3 *point,
-    GPoint *screenPoint) {
-  // Keep every rotated coordinate in Q7 fixed-point form.
-  const int32_t fixedOne =
-      ((int32_t)1) << SHIFT;
-
-  const int32_t xQ =
-      ((int32_t)point->x) * fixedOne;
-
-  const int32_t yQ =
-      ((int32_t)point->y
-          - PERSPECTIVE_PIVOT_Y)
-      * fixedOne;
-
-  const int32_t zQ =
-      ((int32_t)point->z
-          - PERSPECTIVE_PIVOT_Z)
-      * fixedOne;
-
-  const int32_t xRotationYQ =
-      (int32_t)(
-          ((int64_t)yQ * cosa
-              + (int64_t)zQ * sina)
-          / TRIG_MAX_RATIO);
-
-  const int32_t xRotationZQ =
-      (int32_t)(
-          ((int64_t)zQ * cosa
-              - (int64_t)yQ * sina)
-          / TRIG_MAX_RATIO);
-
-  const int32_t yRotationXQ =
-      (int32_t)(
-          ((int64_t)xQ * cosb
-              - (int64_t)xRotationZQ * sinb)
-          / TRIG_MAX_RATIO);
-
-  const int32_t yRotationZQ =
-      (int32_t)(
-          ((int64_t)xQ * sinb
-              + (int64_t)xRotationZQ * cosb)
-          / TRIG_MAX_RATIO);
-
-  const int32_t rotatedXQ =
-      (int32_t)(
-          ((int64_t)yRotationXQ * cosc
-              + (int64_t)xRotationYQ * sinc)
-          / TRIG_MAX_RATIO);
-
-  const int32_t rotatedYQ =
-      (int32_t)(
-          ((int64_t)xRotationYQ * cosc
-              - (int64_t)yRotationXQ * sinc)
-          / TRIG_MAX_RATIO);
-
-  const int32_t worldYQ =
-      rotatedYQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Y
-          * fixedOne);
-
-  const int32_t worldZQ =
-      yRotationZQ
-      + ((int32_t)PERSPECTIVE_PIVOT_Z
-          * fixedOne);
-
-  const int32_t denominatorQ =
-      ((int32_t)eye.z * fixedOne)
-      + worldZQ;
-
-  if (denominatorQ
-      <= (NEAR_CLIP_DISTANCE * fixedOne)) {
-    return false;
-  }
-
-  // Round only here, when converting the final projection to display pixels.
-  const int32_t projectedX =
-      divideRoundedSigned64(
-          (int64_t)eye.z * rotatedXQ,
-          denominatorQ)
-      + EMERY_CENTER_X;
-
-  const int32_t projectedY =
-      divideRoundedSigned64(
-          (int64_t)eye.z * worldYQ,
-          denominatorQ)
-      + EMERY_CENTER_Y;
-
-  if (projectedX < -PROJECTION_MARGIN
-      || projectedX
-          >= EMERY_WIDTH + PROJECTION_MARGIN
-      || projectedY < -PROJECTION_MARGIN
-      || projectedY
-          >= EMERY_HEIGHT + PROJECTION_MARGIN) {
-    return false;
-  }
-
-  screenPoint->x = (int16_t)projectedX;
-  screenPoint->y = (int16_t)projectedY;
-  return true;
-}
-
 static void drawAuxProjectedPoint(
     GContext *ctx,
-    const GPoint3 *point,
-    int16_t dotSize) {
+    const GPoint3 *point) {
+  GPoint3 transformedPoint;
   GPoint screenPoint;
 
-  if (!projectAuxPointHighPrecision(
-          point,
+  transformPoint(point, &transformedPoint);
+
+  if (!projectPoint(
+          &transformedPoint,
           &screenPoint)) {
     return;
   }
@@ -591,20 +391,19 @@ static void drawAuxProjectedPoint(
   graphics_fill_rect(
       ctx,
       GRect(
-          screenPoint.x - dotSize / 2,
-          screenPoint.y - dotSize / 2,
-          dotSize,
-          dotSize),
+          screenPoint.x - 1,
+          screenPoint.y - 1,
+          AUX_DOT_SIZE,
+          AUX_DOT_SIZE),
       0,
       GCornerNone);
 }
 
-static void drawFoldedCellSized(
+static void drawFoldedCell(
     GContext *ctx,
     int16_t x,
     int16_t row,
-    bool topPlane,
-    int16_t dotSize) {
+    bool topPlane) {
   GPoint3 point;
 
   point.x = x;
@@ -613,35 +412,14 @@ static void drawFoldedCellSized(
       : AUX_BOTTOM_HINGE_Y;
 
   const int16_t depth =
-      topPlane
-      ? row * AUX_TOP_DEPTH_STEP
-          + AUX_TOP_DEPTH_OFFSET
-      : row * AUX_BOTTOM_DEPTH_STEP;
+      row * AUX_DOT_STEP;
 
   point.z = ZPOS
       + (topPlane
           ? AUX_TOP_DEPTH_DIRECTION * depth
           : AUX_BOTTOM_DEPTH_DIRECTION * depth);
 
-  drawAuxProjectedPoint(
-      ctx,
-      &point,
-      dotSize);
-}
-
-static void drawFoldedCell(
-    GContext *ctx,
-    int16_t x,
-    int16_t row,
-    bool topPlane) {
-  drawFoldedCellSized(
-      ctx,
-      x,
-      row,
-      topPlane,
-      topPlane
-          ? AUX_DATE_DOT_SIZE
-          : AUX_BATTERY_DOT_SIZE);
+  drawAuxProjectedPoint(ctx, &point);
 }
 
 static void drawFoldedDigit(
@@ -650,11 +428,6 @@ static void drawFoldedDigit(
     int16_t centerX,
     bool topPlane,
     bool reverseRows) {
-  const int16_t xStep =
-      topPlane
-      ? AUX_DATE_X_DOT_STEP
-      : AUX_BATTERY_X_DOT_STEP;
-
   for (int16_t row = 0; row < 9; ++row) {
     const int16_t sourceRow =
         reverseRows ? 8 - row : row;
@@ -671,7 +444,7 @@ static void drawFoldedDigit(
 
       const int16_t x =
           centerX
-          + (column - 4) * xStep;
+          + (column - 4) * AUX_DOT_STEP;
 
       drawFoldedCell(
           ctx,
@@ -684,14 +457,17 @@ static void drawFoldedDigit(
 
 static void drawDateSeparator(
     GContext *ctx) {
-  // A deliberately larger period so DD.MM remains visible on the
-  // strongly foreshortened top plane.
-  drawFoldedCellSized(
+  drawFoldedCell(
       ctx,
       0,
+      3,
+      true);
+
+  drawFoldedCell(
+      ctx,
       0,
-      true,
-      AUX_DATE_PERIOD_SIZE);
+      6,
+      true);
 }
 
 static void drawPercentSign(
@@ -715,7 +491,7 @@ static void drawPercentSign(
 
       const int16_t x =
           centerX
-          + (column - 2) * AUX_BATTERY_X_DOT_STEP;
+          + (column - 2) * AUX_DOT_STEP;
 
       drawFoldedCell(
           ctx,
@@ -729,10 +505,10 @@ static void drawPercentSign(
 static void drawDatePlane(
     GContext *ctx) {
   static const int16_t positions[4] = {
-    -78,
     -30,
-    30,
-    78
+    -10,
+    10,
+    30
   };
 
   for (int index = 0; index < 4; ++index) {
@@ -750,65 +526,35 @@ static void drawDatePlane(
 static void drawBatteryPlane(
     GContext *ctx) {
   if (batteryPercent >= 100) {
-    // Center the three digits themselves around x = 0.
+    drawFoldedDigit(ctx, 1, -30, false, false);
+    drawFoldedDigit(ctx, 0, -10, false, false);
+    drawFoldedDigit(ctx, 0, 10, false, false);
+    drawPercentSign(ctx, 30);
+  } else if (batteryPercent >= 10) {
     drawFoldedDigit(
         ctx,
-        1,
+        batteryPercent / 10,
         -20,
         false,
         false);
 
     drawFoldedDigit(
         ctx,
-        0,
+        batteryPercent % 10,
         0,
         false,
         false);
 
+    drawPercentSign(ctx, 22);
+  } else {
     drawFoldedDigit(
         ctx,
-        0,
-        20,
-        false,
-        false);
-
-    // Percent sign sits to the right and does not influence centering.
-    drawPercentSign(
-        ctx,
-        40);
-  } else if (batteryPercent >= 10) {
-    // Center the midpoint between the two digits around x = 0.
-    drawFoldedDigit(
-        ctx,
-        batteryPercent / 10,
+        batteryPercent,
         -10,
         false,
         false);
 
-    drawFoldedDigit(
-        ctx,
-        batteryPercent % 10,
-        10,
-        false,
-        false);
-
-    // Percent sign sits to the right and does not influence centering.
-    drawPercentSign(
-        ctx,
-        30);
-  } else {
-    // Center the single digit itself around x = 0.
-    drawFoldedDigit(
-        ctx,
-        batteryPercent,
-        0,
-        false,
-        false);
-
-    // Percent sign sits to the right and does not influence centering.
-    drawPercentSign(
-        ctx,
-        20);
+    drawPercentSign(ctx, 12);
   }
 }
 
@@ -817,26 +563,16 @@ static void updateLayer(Layer *layer, GContext *ctx) {
   int i, n, curd;
   GPoint3 P, *U;
 
-  if (invertedTheme) {
-    // White background, black point cloud.
-    graphics_context_set_fill_color(ctx, GColorWhite);
-    graphics_fill_rect(
-        ctx,
-        fullScreenRect,
-        0,
-        GCornerNone);
-    graphics_context_set_stroke_color(ctx, GColorBlack);
-    graphics_context_set_fill_color(ctx, GColorBlack);
-  } else {
-    // Black background, white point cloud.
-    graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_fill_rect(
-        ctx,
-        fullScreenRect,
-        0,
-        GCornerNone);
+  if ( (hour >= nightStopHour) && (hour < nightStartHour) ) {
+    // DAY
     graphics_context_set_stroke_color(ctx, GColorWhite);
     graphics_context_set_fill_color(ctx, GColorWhite);
+  } else {
+    //NIGHT
+    graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_fill_rect(ctx, fullScreenRect, 0, GCornerNone);
+    graphics_context_set_stroke_color(ctx, GColorBlack);
+    graphics_context_set_fill_color(ctx, GColorBlack);
   }
 
   for (n=0; n<6; n++) {
@@ -893,11 +629,6 @@ static void timerCallback(void *data) {
         &targetA,
         &targetB,
         &targetC);
-
-    // Amplify only the visual perspective. Raw sensor values
-    // remain untouched for smoothing and shake detection.
-    targetA = applyVisualTiltGain(targetA);
-    targetB = applyVisualTiltGain(targetB);
 
     bool orientationChanged = false;
 
@@ -978,79 +709,17 @@ static void handleTick(struct tm *t, TimeUnits units_changed) {
 }
 
 
-static int32_t absoluteAccelDelta(
-    int16_t current,
-    int16_t previous) {
-  const int32_t difference =
-      (int32_t)current - (int32_t)previous;
-
-  return difference < 0
-      ? -difference
-      : difference;
-}
-
-static void handleAccel(
-    AccelData *data,
-    uint32_t num_samples) {
+static void handleAccel(AccelData *data, uint32_t num_samples) {
   if (!data || num_samples == 0) {
     return;
   }
 
-  const AccelData newestSample =
-      data[num_samples - 1];
+  // Copy only the newest sample. Rendering happens independently.
+  latestAccel = data[num_samples - 1];
 
-  // Keep orientation movement independent from shake detection.
-  latestAccel = newestSample;
-
-  // Do not interpret watch vibration as a user shake.
-  if (newestSample.did_vibrate) {
-    havePreviousShakeAccel = false;
-    return;
+  if (!latestAccel.did_vibrate) {
+    haveAccel = true;
   }
-
-  haveAccel = true;
-
-  if (shakeCooldownSamples > 0) {
-    --shakeCooldownSamples;
-  }
-
-  if (havePreviousShakeAccel
-      && shakeCooldownSamples == 0) {
-    const int32_t totalDelta =
-        absoluteAccelDelta(
-            newestSample.x,
-            previousShakeAccel.x)
-        + absoluteAccelDelta(
-            newestSample.y,
-            previousShakeAccel.y)
-        + absoluteAccelDelta(
-            newestSample.z,
-            previousShakeAccel.z);
-
-    if (totalDelta >= SHAKE_DELTA_THRESHOLD) {
-      invertedTheme = !invertedTheme;
-      persist_write_bool(
-          CONFIG_KEY_INVERTED_THEME,
-          invertedTheme);
-
-      shakeCooldownSamples =
-          SHAKE_COOLDOWN_SAMPLES;
-
-      if (layer) {
-        layer_mark_dirty(layer);
-      }
-
-      APP_LOG(
-          APP_LOG_LEVEL_INFO,
-          "Shake theme: %s",
-          invertedTheme
-              ? "white background"
-              : "black background");
-    }
-  }
-
-  previousShakeAccel = newestSample;
-  havePreviousShakeAccel = true;
 }
 
 static void logVariables(const char *msg) {
@@ -1154,14 +823,6 @@ static void init(void) {
   initPointList();
 
   readConfig();
-
-  if (persist_exists(CONFIG_KEY_INVERTED_THEME)) {
-    invertedTheme = persist_read_bool(
-        CONFIG_KEY_INVERTED_THEME);
-  } else {
-    invertedTheme = false;
-  }
-
   app_message_init();
 
   time(&now);
