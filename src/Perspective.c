@@ -1,11 +1,11 @@
 #include <pebble.h>
 
-#define M_PI		3.14159265358979323846
+// Perspective Time 2 repository cleanup stage 40
 
 #define SIZE 76
 #define OFFSET 9
 #define ZPOS -38
-// Perspective Time 2 farther camera stage 13
+// Main geometry and virtual camera
 #define EYEZ 480
 
 #define EMERY_WIDTH 200
@@ -13,34 +13,16 @@
 #define EMERY_CENTER_X 100
 #define EMERY_CENTER_Y 114
 
-// Perspective Time 2 projection clipping stage 11
+// Projection safety limits
 #define NEAR_CLIP_DISTANCE 40
 #define PROJECTION_MARGIN 4
-// Perspective Time 2 shake-controlled theme stage 26
-// Perspective Time 2 safe Q7 transform stage 14
-// Q8 overflowed int16_t after enlarging the digit plane.
-// Q7 keeps the full rotated geometry within the GPoint3 range.
-// Perspective Time 2 folded date and battery planes stage 19b
-// Perspective Time 2 larger folded auxiliary text stage 20b
-// Perspective Time 2 increased auxiliary plane spacing stage 21
-// Perspective Time 2 corrected auxiliary spacing stage 22
-// Perspective Time 2 dotted auxiliary glyphs and date period stage 23
-// Perspective Time 2 separated date point cloud stage 24
-// Perspective Time 2 percent-sign step fix stage 24b
-// Perspective Time 2 corrected dotted date plane stage 25
-// Perspective Time 2 percent horizontal step fix stage 25b
+// Q7 fixed-point precision keeps the rotated geometry in range.
 #define SHIFT 7
-// Perspective Time 2 centered rotation pivot stage 27
-// Perspective Time 2 smaller battery plane stage 28
-// Perspective Time 2 final layout tuning stage 29
-// Perspective Time 2 date gap and readable battery dots stage 30
-// Perspective Time 2 uniform battery grid stage 31
-// Perspective Time 2 date pair spacing stage 32
-// Perspective Time 2 stronger date pair spacing stage 33
-// Perspective Time 2 battery digits centered without percent stage 34
+#define FIXED_ONE (1 << SHIFT)
 #define PERSPECTIVE_PIVOT_Y -16
 #define PERSPECTIVE_PIVOT_Z ZPOS
 
+// Folded date and battery planes
 #define AUX_DATE_DOT_SIZE 2
 #define AUX_BATTERY_DOT_SIZE 2
 #define AUX_DATE_X_DOT_STEP 5
@@ -54,32 +36,23 @@
 #define AUX_BOTTOM_DEPTH_DIRECTION 1
 #define AUX_TOP_DEPTH_OFFSET 28
 
-// Perspective Time 2 smooth low-latency stage 9
-// Perspective Time 2 hidden perspective stage 10
+// Motion sampling and filtering
 #define SENSOR_RATE ACCEL_SAMPLING_50HZ
 #define FRAME_INTERVAL_MS 33
-// Shake detection uses change between consecutive 50 Hz samples.
+// Shake-controlled color theme
+// Detection uses changes between consecutive 50 Hz samples.
 #define SHAKE_DELTA_THRESHOLD 1800
 #define SHAKE_COOLDOWN_SAMPLES 50
 #define ANGLE_DEADZONE (TRIG_MAX_ANGLE / 240)
-// Perspective Time 2 doubled visual tilt gain stage 35
-// Perspective Time 2 visual tilt limited to 80 percent stage 36
-// Perspective Time 2 visual tilt limited to 77 degrees stage 37
-// Perspective Time 2 reduced battery distance stage 38
-// Perspective Time 2 high precision auxiliary projection stage 39
-// Perspective Time 2 signed fixed-point shift fix stage 39b
+// Visual tilt response
 #define VISUAL_TILT_GAIN 2
 #define VISUAL_TILT_LIMIT ((TRIG_MAX_ANGLE_BY_4 * 77) / 90)
-enum {
-  CONFIG_KEY_NIGHTSTART = 3333,
-  CONFIG_KEY_NIGHTSTOP = 3334,
-  CONFIG_KEY_INVERTED_THEME = 3335
-};
+#define CONFIG_KEY_INVERTED_THEME 3335
 
 static const int32_t TRIG_MAX_ANGLE_BY_4 = TRIG_MAX_ANGLE / 4;
 
 static Window *window;
-static Layer *rootLayer, *layer;
+static Layer *layer;
 static AppTimer *timer;
 static AccelData latestAccel;
 static bool haveAccel = false;
@@ -94,14 +67,12 @@ static bool havePreviousShakeAccel = false;
 static uint8_t shakeCooldownSamples = 0;
 static int32_t a=0, b=0, c=0;
 static int32_t cosa, sina, cosb, sinb, cosc, sinc;
-static int hour;
 static int d[6];
 static int digitOffsetX[6], digitOffsetY[6];
 
 static int dateDigits[4] = { 0, 1, 0, 1 };
 static int batteryPercent = 0;
 static GRect fullScreenRect = GRect(0, 0, EMERY_WIDTH, EMERY_HEIGHT);
-static int nightStartHour = 19, nightStopHour = 7;
 
 static const uint16_t __ACOS[1025] = {
   32768, 32115, 31845, 31638, 31463, 31309, 31169, 31041, 30921, 30809, 30703, 30602, 30505, 30412, 30323, 30237,
@@ -171,10 +142,12 @@ static const uint16_t __ACOS[1025] = {
 };
 
 typedef struct {
-  int x, y, z;
+  int32_t x;
+  int32_t y;
+  int32_t z;
 } GPoint3;
 
-char digit[810] = {	 // 10 x 9 x 9
+static const uint8_t digit[810] = {	 // 10 x 9 x 9
                      // 0
   0,0,1,1,1,1,1,0,0,
   0,1,1,1,1,1,1,1,0,
@@ -288,10 +261,10 @@ char digit[810] = {	 // 10 x 9 x 9
 
 #define DIGIT(num, x, y) (digit[(81*(num))+((y)*9)+(x)])
 
-GPoint3 eye = { 0, 0, EYEZ };
+static const GPoint3 eye = { 0, 0, EYEZ };
 
-GPoint3 pointList[810]; // 10 * 9 * 9
-int numPoints[10];
+static GPoint3 pointList[810]; // 10 * 9 * 9
+static int numPoints[10];
 #define DIGIT_OFFSET(num) (&pointList[81*(num)])
 
 static inline uint16_t squareRoot(uint16_t x) {
@@ -320,11 +293,39 @@ static inline int32_t length(const GPoint3 *v) {
   return squareRoot(v->x*v->x + v->y*v->y + v->z*v->z);
 }
 
-static void angles(const GPoint3 *v, int32_t *ax, int32_t *ay, int32_t *az) {
-  float s = length(v);
-  *ax = myArccos((v->y << 9)/s) - TRIG_MAX_ANGLE_BY_4;
-  *ay = myArccos((v->x << 9)/s) - TRIG_MAX_ANGLE_BY_4;
-  *az = 0;
+static void angles(
+    const GPoint3 *vector,
+    int32_t *angleX,
+    int32_t *angleY,
+    int32_t *angleZ) {
+  const int32_t magnitude = length(vector);
+
+  if (magnitude <= 0) {
+    *angleX = 0;
+    *angleY = 0;
+    *angleZ = 0;
+    return;
+  }
+
+  const int16_t normalizedY =
+      (int16_t)(
+          ((int32_t)vector->y * 512)
+          / magnitude);
+
+  const int16_t normalizedX =
+      (int16_t)(
+          ((int32_t)vector->x * 512)
+          / magnitude);
+
+  *angleX =
+      myArccos(normalizedY)
+      - TRIG_MAX_ANGLE_BY_4;
+
+  *angleY =
+      myArccos(normalizedX)
+      - TRIG_MAX_ANGLE_BY_4;
+
+  *angleZ = 0;
 }
 
 static int32_t applyVisualTiltGain(
@@ -342,7 +343,6 @@ static int32_t applyVisualTiltGain(
 
   return amplified;
 }
-
 
 static int32_t applyAngleDeadzone(
     int32_t current,
@@ -369,13 +369,15 @@ static inline void transformPoint(
   GPoint3 U;
 
   // Move the complete geometry to the time-plane center before rotation.
-  U.x = P->x << SHIFT;
+  // Multiplication is defined for negative coordinates; signed left
+  // shifts are not.
+  U.x = P->x * FIXED_ONE;
   U.y =
       (P->y - PERSPECTIVE_PIVOT_Y)
-      << SHIFT;
+      * FIXED_ONE;
   U.z =
       (P->z - PERSPECTIVE_PIVOT_Z)
-      << SHIFT;
+      * FIXED_ONE;
 
   T->x = U.x;
   T->y =
@@ -478,21 +480,18 @@ static bool projectAuxPointHighPrecision(
     const GPoint3 *point,
     GPoint *screenPoint) {
   // Keep every rotated coordinate in Q7 fixed-point form.
-  const int32_t fixedOne =
-      ((int32_t)1) << SHIFT;
-
   const int32_t xQ =
-      ((int32_t)point->x) * fixedOne;
+      ((int32_t)point->x) * FIXED_ONE;
 
   const int32_t yQ =
       ((int32_t)point->y
           - PERSPECTIVE_PIVOT_Y)
-      * fixedOne;
+      * FIXED_ONE;
 
   const int32_t zQ =
       ((int32_t)point->z
           - PERSPECTIVE_PIVOT_Z)
-      * fixedOne;
+      * FIXED_ONE;
 
   const int32_t xRotationYQ =
       (int32_t)(
@@ -533,19 +532,19 @@ static bool projectAuxPointHighPrecision(
   const int32_t worldYQ =
       rotatedYQ
       + ((int32_t)PERSPECTIVE_PIVOT_Y
-          * fixedOne);
+          * FIXED_ONE);
 
   const int32_t worldZQ =
       yRotationZQ
       + ((int32_t)PERSPECTIVE_PIVOT_Z
-          * fixedOne);
+          * FIXED_ONE);
 
   const int32_t denominatorQ =
-      ((int32_t)eye.z * fixedOne)
+      ((int32_t)eye.z * FIXED_ONE)
       + worldZQ;
 
   if (denominatorQ
-      <= (NEAR_CLIP_DISTANCE * fixedOne)) {
+      <= (NEAR_CLIP_DISTANCE * FIXED_ONE)) {
     return false;
   }
 
@@ -812,7 +811,6 @@ static void drawBatteryPlane(
   }
 }
 
-
 static void updateLayer(Layer *layer, GContext *ctx) {
   int i, n, curd;
   GPoint3 P, *U;
@@ -848,7 +846,6 @@ static void updateLayer(Layer *layer, GContext *ctx) {
       drawPoint(ctx, &P);
     }
   }
-
 
   drawDatePlane(ctx);
   drawBatteryPlane(ctx);
@@ -937,8 +934,9 @@ static void timerCallback(void *data) {
 }
 
 static void handleTick(struct tm *t, TimeUnits units_changed) {
+  (void)units_changed;
+
   int h = t->tm_hour;
-  hour = h;
 
   if (!clock_is_24h_style()) {
     h %= 12;
@@ -956,7 +954,6 @@ static void handleTick(struct tm *t, TimeUnits units_changed) {
   if (layer) {
     layer_mark_dirty(layer);
   }
-
 
   dateDigits[0] = t->tm_mday / 10;
   dateDigits[1] = t->tm_mday % 10;
@@ -976,7 +973,6 @@ static void handleTick(struct tm *t, TimeUnits units_changed) {
   }
 
 }
-
 
 static int32_t absoluteAccelDelta(
     int16_t current,
@@ -1053,65 +1049,6 @@ static void handleAccel(
   havePreviousShakeAccel = true;
 }
 
-static void logVariables(const char *msg) {
-  APP_LOG(APP_LOG_LEVEL_DEBUG, "MSG: %s\n\tnightStartHour=%d\n\tnightStopHour=%d\n", msg, nightStartHour, nightStopHour);
-}
-
-static bool checkAndSaveInt(int *var, int val, int key) {
-  status_t ret;
-
-  APP_LOG(APP_LOG_LEVEL_DEBUG, "CheckAndSaveInt : var=%d, val=%d, key=%d", *var, val, key);
-
-  if (*var != val) {
-    *var = val;
-    ret = persist_write_int(key, val);
-    if (ret < 0) APP_LOG(APP_LOG_LEVEL_DEBUG, "ERROR: persist_write_int returned %d", (int)ret);
-    return true;
-  } else {
-    return false;
-  }
-}
-
-void in_dropped_handler(AppMessageResult reason, void *context) {
-  APP_LOG(APP_LOG_LEVEL_DEBUG, "in_dropped_handler, reason: %d", reason);
-}
-
-void in_received_handler(DictionaryIterator *received, void *context) {
-  Tuple *nightStart = dict_find(received, CONFIG_KEY_NIGHTSTART);
-  Tuple *nightStop = dict_find(received, CONFIG_KEY_NIGHTSTOP);
-
-  if (nightStart && nightStop) {
-    checkAndSaveInt(&nightStartHour, nightStart->value->int32, CONFIG_KEY_NIGHTSTART);
-    checkAndSaveInt(&nightStopHour, nightStop->value->int32, CONFIG_KEY_NIGHTSTOP);
-
-    logVariables("ReceiveHandler");
-  }
-}
-
-static void app_message_init(void) {
-  app_message_register_inbox_received(in_received_handler);
-  app_message_register_inbox_dropped(in_dropped_handler);
-  app_message_open(64, 64);
-}
-
-void readConfig() {
-  if (persist_exists(CONFIG_KEY_NIGHTSTART)) {
-    nightStartHour = persist_read_int(CONFIG_KEY_NIGHTSTART);
-  } else {
-    APP_LOG(APP_LOG_LEVEL_DEBUG, "persist_exists(CONFIG_KEY_NIGHTSTART) returned false");
-    nightStartHour = 19;
-  }
-
-  if (persist_exists(CONFIG_KEY_NIGHTSTOP)) {
-    nightStopHour = persist_read_int(CONFIG_KEY_NIGHTSTOP);
-  } else {
-    APP_LOG(APP_LOG_LEVEL_DEBUG, "persist_exists(CONFIG_KEY_NIGHTSTOP) returned false");
-    nightStopHour = 7;
-  }
-
-  logVariables("readConfig");
-}
-
 static void initPointList() {
   int i, j, n, px, py;
   GPoint3 *P;
@@ -1153,8 +1090,6 @@ static void init(void) {
   initDigitOffsets();
   initPointList();
 
-  readConfig();
-
   if (persist_exists(CONFIG_KEY_INVERTED_THEME)) {
     invertedTheme = persist_read_bool(
         CONFIG_KEY_INVERTED_THEME);
@@ -1162,15 +1097,13 @@ static void init(void) {
     invertedTheme = false;
   }
 
-  app_message_init();
-
   time(&now);
   handleTick(localtime(&now), 0);
 
   window = window_create();
   window_set_background_color(window, GColorBlack);
   window_stack_push(window, true);
-  rootLayer = window_get_root_layer(window);
+  Layer *rootLayer = window_get_root_layer(window);
 
   layer = layer_create(fullScreenRect);
   layer_set_update_proc(layer, updateLayer);

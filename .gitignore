@@ -1,0 +1,18 @@
+# Pebble/Waf build products
+/build/
+/.lock-waf*
+/.waf-*
+
+# Dependencies
+/node_modules/
+
+# Local patch backups
+/src/Perspective.c.before_*
+
+# Local screenshots; curated documentation images belong in docs/
+/screenshot*.png
+
+# Editor and operating-system files
+*~
+*.swp
+.DS_Store

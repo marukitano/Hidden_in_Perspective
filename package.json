@@ -12,10 +12,7 @@
     "targetPlatforms": [
       "emery"
     ],
-    "enableMultiJS": false,
-    "capabilities": [
-      "configurable"
-    ],
+    "capabilities": [],
     "projectType": "native",
     "displayName": "Perspective",
     "uuid": "d4f886e0-a4f4-49d0-8492-2ce6e27d7f0a",
@@ -26,10 +23,6 @@
     },
     "resources": {
       "media": []
-    },
-    "messageKeys": {
-      "nightstart": 3333,
-      "nightstop": 3334
     }
   }
 }
