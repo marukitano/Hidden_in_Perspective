@@ -2,7 +2,9 @@
 
 [Deutsch](#deutsch) · [English](#english)
 
-![Perspective auf der Pebble Time 2 / Perspective on Pebble Time 2](docs/screenshot.png)
+<p align="center">
+  <img src="docs/store-preview.jpg" alt="Hidden in Perspective on Pebble Time 2" width="600">
+</p>
 
 ## Deutsch
 
