@@ -3,7 +3,7 @@
 [Deutsch](#deutsch) · [English](#english)
 
 <p align="center">
-  <img src="docs/store-preview.jpg" alt="Hidden in Perspective on Pebble Time 2" width="600">
+  <img src="docs/hidden_in_perspective.png" alt="Hidden in Perspective on Pebble Time 2" width="600">
 </p>
 
 ## Deutsch
